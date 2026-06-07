@@ -1,5 +1,4 @@
 # ============================================================
-# ZENSIGNALS PRO - Institutional ICT/SMC Scanner
 # Part 1: Imports, Config, Data, Indicators
 # ============================================================
 
@@ -751,10 +750,6 @@ if __name__ == "__main__":
     print("🚀 ZenSignals Pro starting...")
     tv = TvDatafeed()
     send_telegram(
-        "🚀 <b>ZenSignals Pro Started</b>\n"
-        "Institutional ICT/SMC Scanner\n"
-        "17 assets — 6 timeframes\n"
-        "Min score: 15/24"
     )
     run_scan(tv)
 

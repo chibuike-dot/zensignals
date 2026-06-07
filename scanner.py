@@ -525,7 +525,7 @@ def score_symbol(symbol, exchange, asset_type, tf_data, indicators):
                 notes.append(f"FVG {tf} ✅ (+1)")
                 break
 
-    ref_df = tf_data.get("15M") or tf_data.get("1H")
+    ref_df = tf_data.get("15M") if tf_data.get("15M") is not None else tf_data.get("1H")
     if ref_df is not None:
         if detect_retracement(ref_df, direction, ob, fvg):
             score += 2

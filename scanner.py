@@ -190,17 +190,26 @@ def save_memory(memory):
     with open(SIGNAL_MEMORY_FILE, "w") as f:
         json.dump(memory, f)
 
-def is_on_cooldown(symbol, direction, memory):
+def is_on_cooldown(symbol, direction, current_price, memory):
     key = f"{symbol}_{direction}"
     if key not in memory:
         return False
-    last_time = datetime.fromisoformat(memory[key])
-    elapsed = datetime.utcnow() - last_time
-    return elapsed < timedelta(hours=COOLDOWN_HOURS)
+    data = memory[key]
+    last_price = data.get("price", 0)
+    last_atr = data.get("atr", 0)
+    # Price must have moved at least 1x ATR from last signal
+    if last_atr > 0 and abs(current_price - last_price) < last_atr:
+        return True
+    return False
 
-def update_memory(symbol, direction, memory):
+def update_memory(symbol, direction, price, atr, memory):
     key = f"{symbol}_{direction}"
-    memory[key] = datetime.utcnow().isoformat()
+    memory[key] = {
+        "price": price,
+        "atr": atr,
+        "time": datetime.utcnow().isoformat(),
+        "entry": price,
+    }
     save_memory(memory)
 
 def find_swings(df, lookback=10):
@@ -650,12 +659,14 @@ def run_scan(tv):
         result = score_symbol(symbol, exchange, asset_type, tf_data, indicators)
         if result is None:
             continue
-        if is_on_cooldown(symbol, result['direction'], memory):
-            print(f"  On cooldown — skipping")
+        current_price = result['rr_data']['entry']
+        current_atr = result['indicators']['atr']
+        if is_on_cooldown(symbol, result['direction'], current_price, memory):
+            print(f"  Price hasn\'t moved enough — skipping")
             continue
         msg = format_signal(result)
         send_telegram(msg)
-        update_memory(symbol, result['direction'], memory)
+        update_memory(symbol, result['direction'], result['rr_data']['entry'], result['indicators']['atr'], memory)
         print(f"  ✅ Signal sent: {result['direction']} {symbol} {result['score']}/24")
         signals_found += 1
         time.sleep(2)
@@ -672,3 +683,77 @@ if __name__ == "__main__":
         "Min score: 15/24"
     )
     run_scan(tv)
+
+def send_signal_updates(memory):
+    """
+    Option 4: Hourly P&L update for all open signals
+    Only runs if there are active signals in memory
+    """
+    if not memory:
+        return
+
+    now = datetime.utcnow()
+    updates = []
+
+    for key, data in memory.items():
+        if not isinstance(data, dict):
+            continue
+
+        symbol_dir = key.split("_")
+        if len(symbol_dir) < 2:
+            continue
+
+        direction = symbol_dir[-1]
+        symbol = "_".join(symbol_dir[:-1])
+        entry = data.get("entry", 0)
+        signal_time = data.get("time", "")
+        atr = data.get("atr", 0)
+
+        if not entry or not signal_time:
+            continue
+
+        # Only show updates for signals less than 24 hours old
+        try:
+            signal_dt = datetime.fromisoformat(signal_time)
+            age_hours = (now - signal_dt).total_seconds() / 3600
+            if age_hours > 24:
+                continue
+        except:
+            continue
+
+        # Calculate TP1 and SL from entry and ATR
+        sl_dist = atr * 1.5
+        if direction == "BUY":
+            sl = entry - sl_dist
+            tp1 = entry + (sl_dist * 2)
+        else:
+            sl = entry + sl_dist
+            tp1 = entry - (sl_dist * 2)
+
+        emoji = "🟢" if direction == "BUY" else "🔴"
+        age_str = f"{age_hours:.1f}h ago"
+
+        updates.append(
+            f"{emoji} <b>{symbol}</b> {direction}\n"
+            f"   Entry: {round(entry, 5)}\n"
+            f"   TP1: {round(tp1, 5)}\n"
+            f"   SL: {round(sl, 5)}\n"
+            f"   Signalled: {age_str}"
+        )
+
+    if not updates:
+        return
+
+    ny = pytz.timezone('America/New_York')
+    now_str = datetime.now(ny).strftime('%Y-%m-%d %H:%M')
+
+    msg = (
+        f"📊 <b>ZenSignals Pro — Signal Status</b>\n"
+        f"🕐 {now_str} NY\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        + "\n━━━━━━━━━━━━━━━━━━\n".join(updates) +
+        f"\n━━━━━━━━━━━━━━━━━━\n"
+        f"⚠️ <i>Confirm live prices before acting</i>"
+    )
+    send_telegram(msg)
+    print("Signal status update sent to Telegram")

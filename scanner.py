@@ -11,6 +11,63 @@ import json
 import os
 from datetime import datetime, timedelta
 import pytz
+import urllib.request
+import urllib.parse
+
+SUPABASE_URL = "https://bnonwdvjjibxukkicpla.supabase.co"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJub253ZHZqamlieHVra2ljcGxhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA4MzY0MDUsImV4cCI6MjA5NjQxMjQwNX0.VFUCJZGGmBso7GOTNBBcmPqHfR0vdBpLgizbBd4gaGU"
+
+def supabase_insert(data):
+    url = f"{SUPABASE_URL}/rest/v1/signals"
+    body = json.dumps(data).encode()
+    req = urllib.request.Request(url, data=body, method="POST")
+    req.add_header("Content-Type", "application/json")
+    req.add_header("apikey", SUPABASE_KEY)
+    req.add_header("Authorization", f"Bearer {SUPABASE_KEY}")
+    req.add_header("Prefer", "return=representation")
+    try:
+        with urllib.request.urlopen(req) as r:
+            result = json.loads(r.read())
+            return result[0]["id"] if result else None
+    except Exception as e:
+        print(f"Supabase insert error: {e}")
+        return None
+
+def supabase_get_open_signals():
+    url = f"{SUPABASE_URL}/rest/v1/signals?status=eq.OPEN&order=created_at.desc"
+    req = urllib.request.Request(url)
+    req.add_header("apikey", SUPABASE_KEY)
+    req.add_header("Authorization", f"Bearer {SUPABASE_KEY}")
+    try:
+        with urllib.request.urlopen(req) as r:
+            return json.loads(r.read())
+    except Exception as e:
+        print(f"Supabase fetch error: {e}")
+        return []
+
+def supabase_update_signal(signal_id, outcome, status):
+    url = f"{SUPABASE_URL}/rest/v1/signals?id=eq.{signal_id}"
+    body = json.dumps({"outcome": outcome, "status": status, "updated_at": datetime.utcnow().isoformat()}).encode()
+    req = urllib.request.Request(url, data=body, method="PATCH")
+    req.add_header("Content-Type", "application/json")
+    req.add_header("apikey", SUPABASE_KEY)
+    req.add_header("Authorization", f"Bearer {SUPABASE_KEY}")
+    try:
+        urllib.request.urlopen(req)
+    except Exception as e:
+        print(f"Supabase update error: {e}")
+
+def supabase_get_recent_signals(limit=10):
+    url = f"{SUPABASE_URL}/rest/v1/signals?order=created_at.desc&limit={limit}"
+    req = urllib.request.Request(url)
+    req.add_header("apikey", SUPABASE_KEY)
+    req.add_header("Authorization", f"Bearer {SUPABASE_KEY}")
+    try:
+        with urllib.request.urlopen(req) as r:
+            return json.loads(r.read())
+    except Exception as e:
+        print(f"Supabase fetch error: {e}")
+        return []
 
 TELEGRAM_TOKEN = "8838997298:AAHLpLhWCjeHcAcNbhlzUThRjvzyc7bXCsc"
 CHAT_ID = "6517653689"
@@ -667,6 +724,23 @@ def run_scan(tv):
         msg = format_signal(result)
         send_telegram(msg)
         update_memory(symbol, result['direction'], result['rr_data']['entry'], result['indicators']['atr'], memory)
+        # Save to Supabase
+        supabase_insert({
+            "symbol": symbol,
+            "direction": result['direction'],
+            "score": result['score'],
+            "phase": result['phase'],
+            "session": result['session'],
+            "entry": result['rr_data']['entry'],
+            "sl": result['rr_data']['sl'],
+            "tp1": result['rr_data']['tp1'],
+            "tp2": result['rr_data']['tp2'],
+            "rsi": result['indicators']['rsi'],
+            "stoch": result['indicators']['stoch_k'],
+            "adx": result['indicators']['adx'],
+            "atr": result['indicators']['atr'],
+            "status": "OPEN",
+        })
         print(f"  ✅ Signal sent: {result['direction']} {symbol} {result['score']}/24")
         signals_found += 1
         time.sleep(2)
@@ -757,3 +831,74 @@ def send_signal_updates(memory):
     )
     send_telegram(msg)
     print("Signal status update sent to Telegram")
+
+def check_outcomes(tv):
+    """
+    Check all open signals against current price
+    Mark as WIN/LOSS if TP1 or SL hit
+    """
+    open_signals = supabase_get_open_signals()
+    if not open_signals:
+        return
+
+    print(f"\nChecking outcomes for {len(open_signals)} open signal(s)...")
+
+    for sig in open_signals:
+        symbol = sig['symbol']
+        direction = sig['direction']
+        entry = float(sig['entry'])
+        tp1 = float(sig['tp1'])
+        tp2 = float(sig['tp2'])
+        sl = float(sig['sl'])
+        sig_id = sig['id']
+
+        # Get current price
+        exchange = next(
+            (e for s, e, t in SYMBOLS if s == symbol),
+            "FX_IDC"
+        )
+        df = get_data(tv, symbol, exchange, "5M")
+        if df is None:
+            continue
+
+        current = df['close'].iloc[-1]
+        outcome = None
+        status = None
+
+        if direction == "BUY":
+            if current >= tp2:
+                outcome = "TP2_HIT"
+                status = "CLOSED"
+            elif current >= tp1:
+                outcome = "TP1_HIT"
+                status = "CLOSED"
+            elif current <= sl:
+                outcome = "SL_HIT"
+                status = "CLOSED"
+        else:
+            if current <= tp2:
+                outcome = "TP2_HIT"
+                status = "CLOSED"
+            elif current <= tp1:
+                outcome = "TP1_HIT"
+                status = "CLOSED"
+            elif current >= sl:
+                outcome = "SL_HIT"
+                status = "CLOSED"
+
+        if outcome:
+            supabase_update_signal(sig_id, outcome, status)
+            emoji = "🏆" if "TP" in outcome else "❌"
+            msg = (
+                f"{emoji} <b>ZenSignals Outcome</b>\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"📌 Pair: <b>{symbol}</b>\n"
+                f"📍 Direction: <b>{direction}</b>\n"
+                f"📊 Result: <b>{outcome}</b>\n"
+                f"💰 Entry: {entry}\n"
+                f"📍 Current: {round(current, 5)}\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"🕐 {datetime.now(pytz.timezone('America/New_York')).strftime('%Y-%m-%d %H:%M')} NY"
+            )
+            send_telegram(msg)
+            print(f"  {outcome}: {symbol} {direction}")

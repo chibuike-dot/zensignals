@@ -749,6 +749,7 @@ if __name__ == "__main__":
     from tvDatafeed import TvDatafeed
     print("🚀 ZenSignals Pro starting...")
     tv = TvDatafeed()
+    run_scan_enhanced(tv)
     
 
 
@@ -1954,4 +1955,3 @@ def run_scan_enhanced(tv):
 
     print(f"\nScan complete — {signals_found} signal(s) sent")
 
-    run_scan_enhanced(tv)

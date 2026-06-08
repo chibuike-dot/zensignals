@@ -749,8 +749,7 @@ if __name__ == "__main__":
     from tvDatafeed import TvDatafeed
     print("🚀 ZenSignals Pro starting...")
     tv = TvDatafeed()
-    send_telegram(
-    )
+    
     run_scan(tv)
 
 def send_signal_updates(memory):

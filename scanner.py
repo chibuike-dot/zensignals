@@ -896,3 +896,83 @@ def check_outcomes(tv):
             )
             send_telegram(msg)
             print(f"  {outcome}: {symbol} {direction}")
+
+def check_invalidation(sig, df_1h, df_4h, current_price):
+    """
+    Checks 6 invalidation conditions for an open signal.
+    Returns (True, reason) if invalidated, (False, None) if still valid.
+    """
+    direction = sig['direction']
+    entry = float(sig['entry'])
+    sl = float(sig['sl'])
+    tp1 = float(sig['tp1'])
+    atr = float(sig['atr']) if sig.get('atr') else 0.001
+    created_at = sig.get('created_at', '')
+    asset_type = 'crypto' if any(
+        sig['symbol'] == s for s, e, t in SYMBOLS if t == 'crypto'
+    ) else 'forex'
+
+    # ── 1. SL BREACHED BEFORE ENTRY ─────────────────────
+    if direction == "BUY" and current_price <= sl:
+        return True, "SL level breached before entry"
+    if direction == "SELL" and current_price >= sl:
+        return True, "SL level breached before entry"
+
+    # ── 2. TIME EXPIRY ───────────────────────────────────
+    try:
+        signal_time = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+        signal_time = signal_time.replace(tzinfo=None)
+        elapsed = (datetime.utcnow() - signal_time).total_seconds() / 3600
+        expiry = 2 if asset_type == 'crypto' else 4
+        if elapsed > expiry:
+            return True, f"Signal expired after {expiry} hours"
+    except:
+        pass
+
+    # ── 3. OPPOSING BOS ON 1H ────────────────────────────
+    if df_1h is not None:
+        swing_highs, swing_lows = find_swings(df_1h)
+        if swing_highs and swing_lows:
+            if direction == "SELL":
+                last_sh = swing_highs[-1][1]
+                if current_price > last_sh:
+                    return True, f"Opposing BOS — price broke above {round(last_sh, 5)}"
+            if direction == "BUY":
+                last_sl = swing_lows[-1][1]
+                if current_price < last_sl:
+                    return True, f"Opposing BOS — price broke below {round(last_sl, 5)}"
+
+    # ── 4. ORDER BLOCK MITIGATED ─────────────────────────
+    if df_1h is not None:
+        ob = detect_order_block(df_1h, direction)
+        if ob:
+            ob_high, ob_low = ob
+            if direction == "BUY":
+                # Price closed full candle body below OB
+                if df_1h['close'].iloc[-1] < ob_low and df_1h['open'].iloc[-1] < ob_low:
+                    return True, f"Order Block mitigated — closed below {round(ob_low, 5)}"
+            if direction == "SELL":
+                # Price closed full candle body above OB
+                if df_1h['close'].iloc[-1] > ob_high and df_1h['open'].iloc[-1] > ob_high:
+                    return True, f"Order Block mitigated — closed above {round(ob_high, 5)}"
+
+    # ── 5. FVG FULLY FILLED ──────────────────────────────
+    if df_1h is not None:
+        fvg = detect_fvg(df_1h, direction)
+        if fvg is None:
+            # FVG no longer detectable = fully filled
+            pass  # Only invalidate if we can confirm it was filled
+        if fvg:
+            fvg_high, fvg_low = fvg
+            if direction == "BUY" and current_price < fvg_low:
+                return True, f"FVG fully filled — price below {round(fvg_low, 5)}"
+            if direction == "SELL" and current_price > fvg_high:
+                return True, f"FVG fully filled — price above {round(fvg_high, 5)}"
+
+    # ── 6. 4H BIAS FLIP ──────────────────────────────────
+    if df_4h is not None:
+        bias_4h = detect_bos(df_4h)
+        if bias_4h and bias_4h != direction:
+            return True, f"4H bias flipped to {bias_4h}"
+
+    return False, None

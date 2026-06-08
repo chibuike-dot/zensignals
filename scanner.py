@@ -750,7 +750,7 @@ if __name__ == "__main__":
     print("🚀 ZenSignals Pro starting...")
     tv = TvDatafeed()
     
-    run_scan(tv)
+    run_scan_enhanced(tv)
 
 def send_signal_updates(memory):
     """

@@ -976,3 +976,980 @@ def check_invalidation(sig, df_1h, df_4h, current_price):
             return True, f"4H bias flipped to {bias_4h}"
 
     return False, None
+
+# ============================================================
+# PART 1: VOLATILITY + SWING SEQUENCE ENGINE
+# ============================================================
+
+def get_volatility_state(df):
+    """
+    Measures raw volatility using ATR vs 20-period average
+    Returns: state, atr_ratio, conviction
+    """
+    high = df['high']
+    low = df['low']
+    close = df['close']
+    open_ = df['open']
+
+    atr = calc_atr(high, low, close)
+    current_atr = atr.iloc[-1]
+    avg_atr = atr.iloc[-20:].mean()
+    atr_ratio = current_atr / avg_atr if avg_atr > 0 else 1.0
+
+    # Conviction = body size vs total range
+    last_body = abs(close.iloc[-1] - open_.iloc[-1])
+    last_range = high.iloc[-1] - low.iloc[-1]
+    conviction = round(last_body / last_range * 100, 1) if last_range > 0 else 50.0
+
+    # Check last 3 candles for alternating direction
+    directions = []
+    for i in range(-4, 0):
+        if close.iloc[i] > open_.iloc[i]:
+            directions.append("UP")
+        else:
+            directions.append("DOWN")
+
+    alternating = all(
+        directions[i] != directions[i+1]
+        for i in range(len(directions)-1)
+    )
+
+    # Single candle spike check
+    spike = atr_ratio > 2.5
+
+    if spike:
+        state = "SPIKE"
+    elif alternating:
+        state = "INDECISION"
+    elif atr_ratio > 1.5:
+        state = "HIGH"
+    elif atr_ratio < 0.75:
+        state = "LOW"
+    else:
+        state = "NORMAL"
+
+    return {
+        "state": state,
+        "atr_ratio": round(atr_ratio, 2),
+        "conviction": conviction,
+        "spike": spike,
+        "alternating": alternating,
+    }
+
+
+def analyze_swing_sequence(df):
+    """
+    Detects HH/HL/LH/LL swing sequence
+    Returns trend type and confidence
+    """
+    swing_highs, swing_lows = find_swings(df, lookback=5)
+
+    if len(swing_highs) < 3 or len(swing_lows) < 3:
+        return {
+            "sequence": "UNKNOWN",
+            "trend": "UNKNOWN",
+            "confidence": "LOW",
+            "description": "Insufficient swing data",
+        }
+
+    # Last 3 highs and lows
+    h1, h2, h3 = swing_highs[-3][1], swing_highs[-2][1], swing_highs[-1][1]
+    l1, l2, l3 = swing_lows[-3][1], swing_lows[-2][1], swing_lows[-1][1]
+
+    # Classify highs
+    hh = h3 > h2 > h1  # Higher Highs
+    lh = h3 < h2       # Lower High (latest)
+    # Classify lows
+    hl = l3 > l2 > l1  # Higher Lows
+    ll = l3 < l2       # Lower Low (latest)
+
+    # Determine sequence
+    if hh and hl:
+        sequence = "HH+HL"
+        trend = "BULLISH_TREND"
+        confidence = "HIGH"
+        description = "Strong bullish — higher highs and higher lows"
+    elif ll and lh:
+        sequence = "LH+LL"
+        trend = "BEARISH_TREND"
+        confidence = "HIGH"
+        description = "Strong bearish — lower highs and lower lows"
+    elif hh and ll:
+        sequence = "HH+LL"
+        trend = "CHOPPY_EXPANDING"
+        confidence = "LOW"
+        description = "Expanding range — no directional commitment"
+    elif lh and hl:
+        sequence = "LH+HL"
+        trend = "CHOPPY_CONTRACTING"
+        confidence = "LOW"
+        description = "Contracting range — compression before breakout"
+    elif hh and not hl:
+        sequence = "HH+FL"
+        trend = "WEAKENING_BULL"
+        confidence = "MEDIUM"
+        description = "Bullish weakening — highs rising but lows flat"
+    elif ll and not lh:
+        sequence = "FL+LL"
+        trend = "WEAKENING_BEAR"
+        confidence = "MEDIUM"
+        description = "Bearish weakening — lows falling but highs flat"
+    elif lh and not ll:
+        sequence = "LH+FL"
+        trend = "REVERSAL_FORMING"
+        confidence = "MEDIUM"
+        description = "Potential reversal — lower high forming"
+    else:
+        sequence = "MIXED"
+        trend = "TRANSITIONAL"
+        confidence = "LOW"
+        description = "Mixed structure — market transitioning"
+
+    return {
+        "sequence": sequence,
+        "trend": trend,
+        "confidence": confidence,
+        "description": description,
+        "highs": [round(h1,5), round(h2,5), round(h3,5)],
+        "lows": [round(l1,5), round(l2,5), round(l3,5)],
+    }
+
+
+def get_momentum_state(df, indicators):
+    """
+    Combines ATR, RSI direction, candle conviction
+    Returns momentum state and score
+    """
+    rsi = indicators.get("rsi", 50)
+    stoch = indicators.get("stoch_k", 50)
+    adx = indicators.get("adx", 20)
+    vol = get_volatility_state(df)
+
+    score = 0
+
+    # ATR component
+    if vol["atr_ratio"] > 1.5:
+        score += 3
+    elif vol["atr_ratio"] > 1.0:
+        score += 2
+    else:
+        score += 1
+
+    # ADX component
+    if adx > 40:
+        score += 3
+    elif adx > 25:
+        score += 2
+    else:
+        score += 1
+
+    # RSI momentum
+    rsi_prev = indicators.get("rsi", 50)
+    if rsi > 60 or rsi < 40:
+        score += 2
+    else:
+        score += 1
+
+    # Conviction
+    if vol["conviction"] > 65:
+        score += 2
+    elif vol["conviction"] > 45:
+        score += 1
+
+    # Determine state
+    if score >= 9:
+        state = "VERY_HIGH"
+    elif score >= 7:
+        state = "HIGH"
+    elif score >= 5:
+        state = "MEDIUM"
+    else:
+        state = "LOW"
+
+    return {
+        "state": state,
+        "score": score,
+        "atr_ratio": vol["atr_ratio"],
+        "conviction": vol["conviction"],
+        "adx": adx,
+    }
+
+# ============================================================
+# PART 2: THREE TIMEFRAME MODEL + DURATION CALCULATOR
+# ============================================================
+
+def get_ctf_itf_ttf(tf_data, direction):
+    """
+    Determines CTF, ITF, TTF based on where
+    the strongest signal conditions were found
+    """
+    # Timeframe hierarchy
+    tf_hierarchy = ["W", "D", "4H", "1H", "15M", "5M"]
+    tf_labels = {
+        "W": "Weekly", "D": "Daily", "4H": "4 Hour",
+        "1H": "1 Hour", "15M": "15 Min", "5M": "5 Min"
+    }
+
+    # Find CTF — highest TF with confirmed BOS
+    ctf = None
+    for tf in tf_hierarchy:
+        if tf in tf_data:
+            bos = detect_bos(tf_data[tf])
+            if bos == direction:
+                ctf = tf
+                break
+
+    if ctf is None:
+        ctf = "4H"
+
+    # ITF = one level below CTF
+    ctf_idx = tf_hierarchy.index(ctf)
+    itf_idx = min(ctf_idx + 1, len(tf_hierarchy) - 1)
+    itf = tf_hierarchy[itf_idx]
+
+    # TTF = two levels below CTF
+    ttf_idx = min(ctf_idx + 2, len(tf_hierarchy) - 1)
+    ttf = tf_hierarchy[ttf_idx]
+
+    # Check ITF confirmation
+    itf_confirmed = False
+    if itf in tf_data:
+        choch = detect_choch(tf_data[itf])
+        fvg = detect_fvg(tf_data[itf], direction)
+        itf_confirmed = (choch == direction) or (fvg is not None)
+
+    # Check TTF trigger
+    ttf_triggered = False
+    if ttf in tf_data:
+        ob = detect_order_block(tf_data[ttf], direction)
+        bos = detect_bos(tf_data[ttf])
+        ttf_triggered = (ob is not None) or (bos == direction)
+
+    return {
+        "ctf": ctf,
+        "itf": itf,
+        "ttf": ttf,
+        "ctf_label": tf_labels.get(ctf, ctf),
+        "itf_label": tf_labels.get(itf, itf),
+        "ttf_label": tf_labels.get(ttf, ttf),
+        "itf_confirmed": itf_confirmed,
+        "ttf_triggered": ttf_triggered,
+    }
+
+
+def get_trade_type(ctf):
+    """
+    Maps CTF to trade type and base duration
+    """
+    mapping = {
+        "W":   ("Position",       "1-4 weeks",   672),
+        "D":   ("Swing",          "3-7 days",    168),
+        "4H":  ("Intraday",       "4-12 hours",   8),
+        "1H":  ("Intraday Scalp", "1-4 hours",    3),
+        "15M": ("Scalp",          "15-60 mins",   1),
+        "5M":  ("Micro Scalp",    "5-20 mins",  0.3),
+    }
+    return mapping.get(ctf, ("Intraday", "4-12 hours", 8))
+
+
+def calculate_duration(
+    ctf, tf_data, direction,
+    volatility, swing_seq, momentum,
+    itf_confirmed, ttf_triggered,
+    asset_type
+):
+    """
+    Calculates dynamic trade duration based on:
+    - CTF base duration
+    - Volatility state
+    - Swing sequence
+    - Momentum
+    - ITF/TTF confirmation
+    - Asset type
+    """
+    trade_type, duration_label, base_hours = get_trade_type(ctf)
+    adjustment_log = []
+    hours = base_hours
+
+    # ITF confirmation discount
+    if itf_confirmed:
+        hours *= 0.80
+        adjustment_log.append("ITF confirmed: -20%")
+
+    # TTF trigger discount
+    if ttf_triggered:
+        hours *= 0.85
+        adjustment_log.append("TTF triggered: -15%")
+
+    # Volatility adjustment
+    vol_state = volatility.get("state", "NORMAL")
+    if vol_state == "HIGH":
+        hours *= 0.70
+        adjustment_log.append("High volatility: -30%")
+    elif vol_state == "LOW":
+        hours *= 1.50
+        adjustment_log.append("Low volatility: +50%")
+    elif vol_state == "SPIKE":
+        hours *= 1.20
+        adjustment_log.append("Spike detected: +20% (wait for settle)")
+    elif vol_state == "INDECISION":
+        hours *= 1.80
+        adjustment_log.append("Indecision candles: +80%")
+
+    # Swing sequence adjustment
+    trend = swing_seq.get("trend", "UNKNOWN")
+    if trend in ("BULLISH_TREND", "BEARISH_TREND"):
+        hours *= 0.80
+        adjustment_log.append("Clean trend: -20%")
+    elif trend in ("WEAKENING_BULL", "WEAKENING_BEAR"):
+        hours *= 1.30
+        adjustment_log.append("Weakening trend: +30%")
+    elif trend in ("CHOPPY_EXPANDING", "CHOPPY_CONTRACTING"):
+        hours *= 1.80
+        adjustment_log.append("Choppy market: +80%")
+    elif trend == "REVERSAL_FORMING":
+        hours *= 1.40
+        adjustment_log.append("Reversal forming: +40%")
+
+    # Momentum adjustment
+    mom_state = momentum.get("state", "MEDIUM")
+    if mom_state == "VERY_HIGH":
+        hours *= 0.65
+        adjustment_log.append("Very high momentum: -35%")
+    elif mom_state == "HIGH":
+        hours *= 0.80
+        adjustment_log.append("High momentum: -20%")
+    elif mom_state == "LOW":
+        hours *= 1.40
+        adjustment_log.append("Low momentum: +40%")
+
+    # Crypto runs 24/7 — no session deadline
+    # Forex capped at session length
+    if asset_type == "forex":
+        # Cap at 8 hours for intraday forex
+        if ctf in ("1H", "15M", "5M") and hours > 8:
+            hours = 8
+            adjustment_log.append("Forex session cap: 8h max")
+
+    hours = round(hours, 1)
+
+    # Calculate exact end time
+    now_utc = datetime.utcnow()
+    end_time = now_utc + timedelta(hours=hours)
+    ny = pytz.timezone('America/New_York')
+    end_time_ny = end_time.replace(tzinfo=pytz.utc).astimezone(ny)
+    start_time_ny = now_utc.replace(tzinfo=pytz.utc).astimezone(ny)
+
+    return {
+        "trade_type": trade_type,
+        "duration_label": duration_label,
+        "base_hours": base_hours,
+        "adjusted_hours": hours,
+        "adjustment_log": " | ".join(adjustment_log),
+        "start_time": start_time_ny.strftime("%d %b %H:%M NY"),
+        "end_time": end_time_ny.strftime("%d %b %H:%M NY"),
+        "end_time_iso": end_time.isoformat(),
+        "ctf": ctf,
+    }
+
+
+def get_live_progress(sig, current_price):
+    """
+    Calculates live progress of an open trade
+    """
+    direction = sig['direction']
+    entry = float(sig['entry'])
+    tp1 = float(sig['tp1'])
+    sl = float(sig['sl'])
+
+    total_distance = abs(tp1 - entry)
+    if total_distance == 0:
+        return 0
+
+    if direction == "BUY":
+        progress = (current_price - entry) / total_distance * 100
+    else:
+        progress = (entry - current_price) / total_distance * 100
+
+    return round(max(0, min(100, progress)), 1)
+
+
+def get_revised_end_time(sig, momentum_state, volatility_state):
+    """
+    Revises end time based on current momentum and volatility
+    """
+    try:
+        original_end = datetime.fromisoformat(
+            sig.get('estimated_end_time', '').replace('Z', '+00:00')
+        ).replace(tzinfo=None)
+    except:
+        return "Unknown"
+
+    remaining = (original_end - datetime.utcnow()).total_seconds() / 3600
+    if remaining <= 0:
+        return "Elapsed"
+
+    # Adjust remaining based on current momentum
+    if momentum_state == "VERY_HIGH":
+        remaining *= 0.60
+    elif momentum_state == "HIGH":
+        remaining *= 0.75
+    elif momentum_state == "LOW":
+        remaining *= 1.30
+
+    # Adjust for volatility
+    if volatility_state == "HIGH":
+        remaining *= 0.80
+    elif volatility_state == "LOW":
+        remaining *= 1.20
+
+    new_end = datetime.utcnow() + timedelta(hours=remaining)
+    ny = pytz.timezone('America/New_York')
+    new_end_ny = new_end.replace(tzinfo=pytz.utc).astimezone(ny)
+    return new_end_ny.strftime("%d %b %H:%M NY")
+
+# ============================================================
+# PART 3: NEWS INTEGRATION (ForexFactory)
+# ============================================================
+
+def fetch_news_calendar():
+    """
+    Fetches high/medium impact news from ForexFactory
+    Returns list of upcoming news events
+    """
+    try:
+        url = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
+        req = urllib.request.Request(url)
+        req.add_header("User-Agent", "Mozilla/5.0")
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = json.loads(r.read())
+            return data
+    except Exception as e:
+        print(f"News fetch error: {e}")
+        return []
+
+
+def get_relevant_news(symbol, hours_ahead=4):
+    """
+    Gets news relevant to a symbol within next N hours
+    Maps currency pairs to their currencies
+    """
+    currency_map = {
+        "EURUSD": ["EUR", "USD"],
+        "GBPUSD": ["GBP", "USD"],
+        "USDJPY": ["USD", "JPY"],
+        "AUDUSD": ["AUD", "USD"],
+        "USDCAD": ["USD", "CAD"],
+        "USDCHF": ["USD", "CHF"],
+        "GBPJPY": ["GBP", "JPY"],
+        "EURJPY": ["EUR", "JPY"],
+        "EURGBP": ["EUR", "GBP"],
+        "NZDUSD": ["NZD", "USD"],
+        "XAUUSD": ["USD"],
+        "XAGUSD": ["USD"],
+        "BTCUSD": [],
+        "ETHUSD": [],
+        "SOLUSD": [],
+        "BNBUSD": [],
+        "XRPUSD": [],
+    }
+
+    currencies = currency_map.get(symbol, [])
+    if not currencies:
+        return []
+
+    news = fetch_news_calendar()
+    now_utc = datetime.utcnow()
+    cutoff = now_utc + timedelta(hours=hours_ahead)
+    relevant = []
+
+    for event in news:
+        try:
+            # Parse event time
+            event_time = datetime.strptime(
+                event.get("date", "") + " " + event.get("time", "12:00am"),
+                "%m-%d-%Y %I:%M%p"
+            )
+        except:
+            continue
+
+        # Check if within window
+        if not (now_utc <= event_time <= cutoff):
+            continue
+
+        # Check if relevant currency
+        event_currency = event.get("country", "").upper()
+        if event_currency not in currencies:
+            continue
+
+        # Check impact
+        impact = event.get("impact", "").lower()
+        if impact not in ("high", "medium"):
+            continue
+
+        # Minutes until event
+        mins_until = (event_time - now_utc).total_seconds() / 60
+
+        relevant.append({
+            "title": event.get("title", "Unknown"),
+            "currency": event_currency,
+            "impact": impact.upper(),
+            "time": event_time.strftime("%H:%M UTC"),
+            "mins_until": round(mins_until),
+        })
+
+    return relevant
+
+
+def assess_news_impact(symbol, direction, news_events):
+    """
+    Assesses how upcoming news affects signal validity
+    Returns action recommendation
+    """
+    if not news_events:
+        return {
+            "status": "CLEAR",
+            "message": "No high impact news in window ✅",
+            "suspend": False,
+            "action": None,
+        }
+
+    high_impact = [n for n in news_events if n["impact"] == "HIGH"]
+    medium_impact = [n for n in news_events if n["impact"] == "MEDIUM"]
+
+    # Check if any event is within 30 minutes
+    imminent = [n for n in high_impact if n["mins_until"] <= 30]
+
+    if imminent:
+        event = imminent[0]
+        return {
+            "status": "SUSPEND",
+            "message": f"⚠️ {event['title']} in {event['mins_until']} mins",
+            "suspend": True,
+            "action": "Do NOT enter — wait 15 mins after news",
+            "event": event,
+        }
+
+    if high_impact:
+        event = high_impact[0]
+        return {
+            "status": "CAUTION",
+            "message": f"📰 {event['title']} in {event['mins_until']} mins",
+            "suspend": False,
+            "action": "Move SL to breakeven before news",
+            "event": event,
+        }
+
+    if medium_impact:
+        event = medium_impact[0]
+        return {
+            "status": "MONITOR",
+            "message": f"📋 {event['title']} in {event['mins_until']} mins",
+            "suspend": False,
+            "action": "Monitor — medium impact event approaching",
+            "event": event,
+        }
+
+    return {
+        "status": "CLEAR",
+        "message": "No significant news in window ✅",
+        "suspend": False,
+        "action": None,
+    }
+
+# ============================================================
+# PART 4: ENHANCED SIGNAL FORMATTER + LIVE UPDATES
+# ============================================================
+
+def format_signal_enhanced(result, tf_model, duration, volatility,
+                            swing_seq, momentum, news):
+    """
+    Full enhanced signal message with all analysis
+    """
+    direction = result['direction']
+    emoji = "🟢" if direction == "BUY" else "🔴"
+    arrow = "⬆️" if direction == "BUY" else "⬇️"
+    rr = result['rr_data']
+    ind = result['indicators']
+
+    # Trade type emoji
+    type_emoji = {
+        "Micro Scalp": "⚡",
+        "Scalp": "⚡",
+        "Intraday Scalp": "🎯",
+        "Intraday": "📊",
+        "Swing": "🌊",
+        "Position": "🏦",
+    }.get(duration['trade_type'], "📊")
+
+    # Volatility emoji
+    vol_emoji = {
+        "HIGH": "🔥",
+        "NORMAL": "✅",
+        "LOW": "🐢",
+        "SPIKE": "🚨",
+        "INDECISION": "⚠️",
+    }.get(volatility['state'], "✅")
+
+    # Momentum emoji
+    mom_emoji = {
+        "VERY_HIGH": "🚀",
+        "HIGH": "⚡",
+        "MEDIUM": "📈",
+        "LOW": "🐌",
+    }.get(momentum['state'], "📈")
+
+    # Swing sequence emoji
+    swing_emoji = {
+        "BULLISH_TREND": "📈",
+        "BEARISH_TREND": "📉",
+        "CHOPPY_EXPANDING": "⚠️",
+        "CHOPPY_CONTRACTING": "🔄",
+        "WEAKENING_BULL": "⚠️",
+        "WEAKENING_BEAR": "⚠️",
+        "REVERSAL_FORMING": "🔄",
+    }.get(swing_seq['trend'], "📊")
+
+    # News status
+    news_line = news.get('message', 'No news data')
+    news_action = news.get('action', '')
+
+    # ITF/TTF status
+    itf_status = "✅" if tf_model['itf_confirmed'] else "⏳"
+    ttf_status = "✅" if tf_model['ttf_triggered'] else "⏳"
+
+    msg = (
+        f"{emoji} <b>ZenSignals Pro Alert</b> {arrow}\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"📌 Pair: <b>{result['symbol']}</b>\n"
+        f"📍 Signal: <b>{direction}</b>\n"
+        f"📊 Score: <b>{result['score']}/24</b>\n"
+        f"🔄 Phase: <b>{result['phase']}</b>\n"
+        f"⏰ Session: <b>{result['session']}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"{type_emoji} Trade Type: <b>{duration['trade_type']}</b>\n"
+        f"🟢 Start: <b>{duration['start_time']}</b>\n"
+        f"🔴 Est. End: <b>{duration['end_time']}</b>\n"
+        f"⏳ Duration: <b>~{duration['adjusted_hours']}h</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"📊 TIMEFRAME MODEL\n"
+        f"🔵 CTF ({tf_model['ctf_label']}): Bias confirmed\n"
+        f"🟡 ITF ({tf_model['itf_label']}): {itf_status}\n"
+        f"🟢 TTF ({tf_model['ttf_label']}): {ttf_status}\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"📈 MARKET STRUCTURE\n"
+        f"{swing_emoji} Sequence: <b>{swing_seq['sequence']}</b>\n"
+        f"📊 Trend: <b>{swing_seq['trend']}</b>\n"
+        f"{vol_emoji} Volatility: <b>{volatility['state']}</b> "
+        f"(ATR {volatility['atr_ratio']}×)\n"
+        f"🕯 Conviction: <b>{volatility['conviction']}%</b>\n"
+        f"{mom_emoji} Momentum: <b>{momentum['state']}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"💰 Entry: <b>{rr['entry']}</b>\n"
+        f"🛑 SL: <b>{rr['sl']}</b>\n"
+        f"🎯 TP1 (1:2): <b>{rr['tp1']}</b>\n"
+        f"🏆 TP2 (1:3): <b>{rr['tp2']}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"📈 RSI: <b>{ind['rsi']}</b>\n"
+        f"📉 Stoch: <b>{ind['stoch_k']}</b>\n"
+        f"💪 ADX: <b>{ind['adx']}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"📰 NEWS: {news_line}\n"
+    )
+
+    if news_action:
+        msg += f"⚡ Action: <i>{news_action}</i>\n"
+
+    msg += (
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"🕐 Time: <b>{duration['start_time']}</b>\n"
+        f"⚠️ <i>Always confirm before entering</i>"
+    )
+
+    return msg
+
+
+def send_live_update(sig, tv):
+    """
+    Sends live update for an open signal
+    """
+    symbol = sig['symbol']
+    direction = sig['direction']
+    exchange = next(
+        (e for s, e, t in SYMBOLS if s == symbol),
+        "FX_IDC"
+    )
+
+    # Get current data
+    df_ref = get_data(tv, symbol, exchange, "15M")
+    if df_ref is None:
+        df_ref = get_data(tv, symbol, exchange, "1H")
+    if df_ref is None:
+        return
+
+    current_price = df_ref['close'].iloc[-1]
+    indicators = get_indicators(df_ref)
+    volatility = get_volatility_state(df_ref)
+    swing_seq = analyze_swing_sequence(df_ref)
+    momentum = get_momentum_state(df_ref, indicators)
+
+    progress = get_live_progress(sig, current_price)
+    revised_end = get_revised_end_time(
+        sig, momentum['state'], volatility['state']
+    )
+
+    # Calculate elapsed time
+    try:
+        created = datetime.fromisoformat(
+            sig.get('created_at', '').replace('Z', '+00:00')
+        ).replace(tzinfo=None)
+        elapsed_mins = int((datetime.utcnow() - created).total_seconds() / 60)
+        elapsed_str = f"{elapsed_mins // 60}h {elapsed_mins % 60}m"
+    except:
+        elapsed_str = "Unknown"
+
+    emoji = "🟢" if direction == "BUY" else "🔴"
+    vol_emoji = {"HIGH": "🔥", "NORMAL": "✅",
+                 "LOW": "🐢", "SPIKE": "🚨",
+                 "INDECISION": "⚠️"}.get(volatility['state'], "✅")
+    mom_emoji = {"VERY_HIGH": "🚀", "HIGH": "⚡",
+                 "MEDIUM": "📈", "LOW": "🐌"}.get(momentum['state'], "📈")
+
+    # Stall detection
+    stall = (
+        momentum['state'] == "LOW" and
+        volatility['state'] in ("LOW", "INDECISION") and
+        progress < 30
+    )
+
+    # Spike detection
+    spike = volatility['state'] == "SPIKE"
+
+    # Choppy detection
+    choppy = swing_seq['trend'] in (
+        "CHOPPY_EXPANDING", "CHOPPY_CONTRACTING"
+    )
+
+    update_count = sig.get('live_update_count', 0) + 1
+
+    msg = (
+        f"📊 <b>{symbol} {direction} — Update #{update_count}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"⏱ Elapsed: <b>{elapsed_str}</b>\n"
+        f"📍 Current: <b>{round(current_price, 5)}</b>\n"
+        f"📈 Progress to TP1: <b>{progress}%</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"📊 Swing: <b>{swing_seq['sequence']}</b>\n"
+        f"📊 Trend: <b>{swing_seq['trend']}</b>\n"
+        f"{vol_emoji} Volatility: <b>{volatility['state']}</b>\n"
+        f"{mom_emoji} Momentum: <b>{momentum['state']}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"⏳ Revised end: <b>{revised_end}</b>\n"
+    )
+
+    if stall:
+        msg += (
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"⚠️ <b>STALL DETECTED</b>\n"
+            f"Low momentum + low volatility\n"
+            f"Consider: Move SL to breakeven\n"
+        )
+
+    if spike:
+        msg += (
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"🚨 <b>VOLATILITY SPIKE</b>\n"
+            f"Do NOT make decisions now\n"
+            f"Wait for next clean candle\n"
+        )
+
+    if choppy:
+        msg += (
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"⚠️ <b>CHOPPY MARKET</b>\n"
+            f"Price alternating — reduce risk\n"
+            f"Move SL to breakeven\n"
+        )
+
+    # Check news
+    news_events = get_relevant_news(symbol, hours_ahead=2)
+    if news_events:
+        event = news_events[0]
+        msg += (
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"📰 <b>NEWS ALERT</b>\n"
+            f"{event['title']} in {event['mins_until']} mins\n"
+            f"Impact: {event['impact']}\n"
+        )
+
+    send_telegram(msg)
+
+    # Update Supabase
+    url = f"{SUPABASE_URL}/rest/v1/signals?id=eq.{sig['id']}"
+    body = json.dumps({
+        "live_update_count": update_count,
+        "updated_at": datetime.utcnow().isoformat(),
+    }).encode()
+    req = urllib.request.Request(url, data=body, method="PATCH")
+    req.add_header("Content-Type", "application/json")
+    req.add_header("apikey", SUPABASE_KEY)
+    req.add_header("Authorization", f"Bearer {SUPABASE_KEY}")
+    try:
+        urllib.request.urlopen(req)
+    except:
+        pass
+
+# ============================================================
+# PART 5: CONNECT EVERYTHING TO RUN_SCAN
+# ============================================================
+
+def run_scan_enhanced(tv):
+    """
+    Enhanced scanner with full ICT analysis
+    Replaces run_scan
+    """
+    print(f"\n{'='*50}")
+    print(f"ZenSignals Pro — {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC")
+    print(f"{'='*50}")
+
+    memory = load_memory()
+    signals_found = 0
+
+    for symbol, exchange, asset_type in SYMBOLS:
+        print(f"\n🔍 Scanning {symbol}...")
+
+        # Forex session check
+        if asset_type == "forex" and not is_forex_session():
+            print(f"  Skipping — forex market closed")
+            continue
+
+        # Fetch all timeframes
+        tf_data = fetch_all_timeframes(tv, symbol, exchange)
+        if len(tf_data) < 2:
+            print(f"  Insufficient data")
+            continue
+
+        # Get ref dataframe
+        ref_tf = "1H" if "1H" in tf_data else list(tf_data.keys())[0]
+        ref_df = tf_data[ref_tf]
+
+        # Get indicators
+        indicators = get_indicators(ref_df)
+
+        # Score signal
+        result = score_symbol(
+            symbol, exchange, asset_type,
+            tf_data, indicators
+        )
+
+        if result is None:
+            continue
+
+        direction = result['direction']
+
+        # Cooldown check
+        current_price = result['rr_data']['entry']
+        current_atr = result['indicators']['atr']
+        if is_on_cooldown(symbol, direction, current_price, memory):
+            print(f"  Price hasn't moved enough — skipping")
+            continue
+
+        # ── Enhanced analysis ────────────────────────
+        volatility = get_volatility_state(ref_df)
+        swing_seq = analyze_swing_sequence(ref_df)
+        momentum = get_momentum_state(ref_df, indicators)
+        tf_model = get_ctf_itf_ttf(tf_data, direction)
+        duration = calculate_duration(
+            tf_model['ctf'], tf_data, direction,
+            volatility, swing_seq, momentum,
+            tf_model['itf_confirmed'],
+            tf_model['ttf_triggered'],
+            asset_type
+        )
+        news_events = get_relevant_news(symbol, hours_ahead=4)
+        news = assess_news_impact(symbol, direction, news_events)
+
+        # Skip if news suspension
+        if news['suspend']:
+            print(f"  Skipping {symbol} — news suspension: {news['message']}")
+            continue
+
+        # Skip choppy markets
+        if swing_seq['trend'] in ("CHOPPY_EXPANDING",) and volatility['state'] == "INDECISION":
+            print(f"  Skipping {symbol} — choppy + indecision")
+            continue
+
+        # Format and send enhanced signal
+        msg = format_signal_enhanced(
+            result, tf_model, duration,
+            volatility, swing_seq, momentum, news
+        )
+        send_telegram(msg)
+
+        # Update memory
+        update_memory(
+            symbol, direction,
+            result['rr_data']['entry'],
+            result['indicators']['atr'],
+            memory
+        )
+
+        # Save to Supabase with enhanced fields
+        supabase_insert({
+            "symbol": symbol,
+            "direction": direction,
+            "score": result['score'],
+            "phase": result['phase'],
+            "session": result['session'],
+            "entry": result['rr_data']['entry'],
+            "sl": result['rr_data']['sl'],
+            "tp1": result['rr_data']['tp1'],
+            "tp2": result['rr_data']['tp2'],
+            "rsi": result['indicators']['rsi'],
+            "stoch": result['indicators']['stoch_k'],
+            "adx": result['indicators']['adx'],
+            "atr": result['indicators']['atr'],
+            "status": "OPEN",
+            "trade_type": duration['trade_type'],
+            "ctf": tf_model['ctf'],
+            "itf": tf_model['itf'],
+            "ttf": tf_model['ttf'],
+            "swing_sequence": swing_seq['sequence'],
+            "volatility_state": volatility['state'],
+            "momentum_state": momentum['state'],
+            "conviction": volatility['conviction'],
+            "estimated_duration_hours": duration['adjusted_hours'],
+            "estimated_end_time": duration['end_time_iso'],
+            "duration_adjustment_log": duration['adjustment_log'],
+        })
+
+        print(f"  ✅ Signal sent: {direction} {symbol} {result['score']}/24")
+        print(f"  📊 {duration['trade_type']} | {duration['adjusted_hours']}h | {swing_seq['trend']}")
+        signals_found += 1
+        time.sleep(2)
+
+    # Check outcomes and invalidation
+    check_outcomes(tv)
+
+    # Send live updates for open signals
+    open_signals = supabase_get_open_signals()
+    for sig in open_signals:
+        try:
+            created = datetime.fromisoformat(
+                sig.get('created_at', '').replace('Z', '+00:00')
+            ).replace(tzinfo=None)
+            age_mins = (datetime.utcnow() - created).total_seconds() / 60
+            # Send live update every 30 mins
+            update_count = sig.get('live_update_count', 0)
+            if age_mins > 0 and int(age_mins) % 30 == 0:
+                send_live_update(sig, tv)
+                time.sleep(1)
+        except:
+            pass
+
+    # Hourly status update
+    now = datetime.utcnow()
+    if now.minute < 15:
+        send_signal_updates(memory)
+
+    print(f"\nScan complete — {signals_found} signal(s) sent")

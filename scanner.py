@@ -234,7 +234,7 @@ def get_killzone_session():
     return None
 
 def is_in_killzone():
-    return get_killzone_session() is not None
+    return True  # DEBUG: bypass killzone
 
 def load_memory():
     if os.path.exists(SIGNAL_MEMORY_FILE):
@@ -2990,7 +2990,7 @@ def run_scalp_scan(tv):
 
             # Minimum score
             if score < 60:
-                print(f"  Score {score}/160 — below threshold")
+                print(f"  Score {score}/160 — below threshold | reasons: {reasons}")
                 continue
 
             # Cooldown check

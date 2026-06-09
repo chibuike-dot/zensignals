@@ -1375,11 +1375,18 @@ def get_revised_end_time(sig, momentum_state, volatility_state):
     Revises end time based on current momentum and volatility
     """
     try:
-        original_end = datetime.fromisoformat(
-            sig.get('estimated_end_time', '').replace('Z', '+00:00')
-        ).replace(tzinfo=None)
+        end_str = sig.get('estimated_end_time', '')
+        if not end_str:
+            # Estimate from created_at + 8 hours default
+            created = sig.get('created_at', '')
+            if not created:
+                return "Not available"
+            created_dt = datetime.fromisoformat(created.replace('Z', '+00:00')).replace(tzinfo=None)
+            original_end = created_dt + timedelta(hours=8)
+        else:
+            original_end = datetime.fromisoformat(end_str.replace('Z', '+00:00')).replace(tzinfo=None)
     except:
-        return "Unknown"
+        return "Not available"
 
     remaining = (original_end - datetime.utcnow()).total_seconds() / 3600
     if remaining <= 0:

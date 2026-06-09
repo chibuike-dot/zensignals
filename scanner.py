@@ -2747,7 +2747,10 @@ if __name__ == "__main__":
     print("🚀 ZenSignals Pro starting...")
     tv = TvDatafeed()
     run_scan_full(tv)
-    run_scalp_scan(tv)
+    try:
+        run_scalp_scan(tv)
+    except Exception as e:
+        print(f"Scalp scan error: {e}")
 
 
 # ============================================================

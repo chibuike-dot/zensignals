@@ -124,10 +124,15 @@ def get_interval(tf_key):
     return mapping[tf_key]
 
 def get_data(tv, symbol, exchange, tf_key, retries=1):
+    import signal as _sig
+    def _timeout_handler(s, f): raise TimeoutError("get_hist timeout")
     interval = get_interval(tf_key)
     for i in range(retries):
         try:
+            _sig.signal(_sig.SIGALRM, _timeout_handler)
+            _sig.alarm(12)
             df = tv.get_hist(symbol, exchange, interval=interval, n_bars=200)
+            _sig.alarm(0)
             if df is not None and len(df) > 50:
                 df = df.copy()
                 df.dropna(inplace=True)

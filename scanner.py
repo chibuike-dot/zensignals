@@ -2933,7 +2933,6 @@ def run_scalp_scan(tv):
 
         
         # 10. Delta approximation (buying/selling pressure)
-        try:
             high = df_15m["high"]
             low = df_15m["low"]
             close = df_15m["close"]

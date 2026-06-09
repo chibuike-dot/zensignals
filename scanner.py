@@ -2742,17 +2742,6 @@ def run_scan_full(tv):
     print(f"\nScan complete — {signals_found} signal(s) sent")
     print(f"Session: {session_label} | DXY: {dxy_bias} | Risk: {risk_env}")
 
-if __name__ == "__main__":
-    from tvDatafeed import TvDatafeed
-    print("🚀 ZenSignals Pro starting...")
-    tv = TvDatafeed()
-    run_scan_full(tv)
-    try:
-        run_scalp_scan(tv)
-    except Exception as e:
-        print(f"Scalp scan error: {e}")
-
-
 # ============================================================
 # SCALP SCANNER
 # ============================================================
@@ -2927,3 +2916,15 @@ def run_scalp_scan(tv):
             continue
 
     print(f"\n⚡ Scalp scan complete — {scalp_found} signal(s)")
+
+if __name__ == "__main__":
+    from tvDatafeed import TvDatafeed
+    print("🚀 ZenSignals Pro starting...")
+    tv = TvDatafeed()
+    run_scan_full(tv)
+    try:
+        run_scalp_scan(tv)
+    except Exception as e:
+        print(f"Scalp scan error: {e}")
+
+

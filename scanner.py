@@ -2763,27 +2763,96 @@ def is_scalp_killzone():
     now = datetime.utcnow()
     hour = now.hour
     minute = now.minute
+    weekday = now.weekday()
     total = hour * 60 + minute
-    # London 7-10 UTC, NY 12-15 UTC, Overlap 12-16 UTC
-    return (420 <= total <= 600) or (720 <= total <= 960)
+
+    # Weekend — forex killzones inactive
+    if weekday >= 5:
+        # Crypto Asian window still valid on weekends
+        return (0 <= total <= 240) or (840 <= total <= 1080)
+
+    # Forex killzones (UTC)
+    london = (420 <= total <= 600)      # 7AM-10AM UTC
+    ny = (720 <= total <= 960)           # 12PM-4PM UTC
+    overlap = (720 <= total <= 900)      # 12PM-3PM UTC
+
+    # Crypto additional windows (UTC)
+    crypto_asian = (0 <= total <= 240)   # 12AM-4AM UTC (Asian crypto)
+    crypto_eu = (600 <= total <= 720)    # 10AM-12PM UTC (EU crypto)
+
+    return london or ny or overlap or crypto_asian or crypto_eu
+
+
+def get_scalp_asset_type(symbol):
+    crypto = ["BTCUSD", "ETHUSD", "SOLUSD", "BNBUSD", "XRPUSD"]
+    metals = ["XAUUSD", "XAGUSD"]
+    if symbol in crypto:
+        return "crypto"
+    elif symbol in metals:
+        return "metal"
+    return "forex"
+
+
+def is_valid_scalp_window(symbol):
+    """
+    Checks if current time is valid scalp window
+    for the specific asset type
+    """
+    now = datetime.utcnow()
+    hour = now.hour
+    total = now.hour * 60 + now.minute
+    weekday = now.weekday()
+    asset_type = get_scalp_asset_type(symbol)
+
+    if asset_type == "crypto":
+        # Crypto valid 24/7 but prioritize these windows
+        # Asian: 12AM-4AM UTC
+        # London: 7AM-10AM UTC
+        # NY/Overlap: 12PM-4PM UTC
+        # EU pre-market: 6AM-8AM UTC
+        asian = (0 <= total <= 240)
+        london = (420 <= total <= 600)
+        ny = (720 <= total <= 960)
+        eu_pre = (360 <= total <= 480)
+        # On weekends crypto always valid
+        if weekday >= 5:
+            return True
+        return asian or london or ny or eu_pre
+
+    elif asset_type == "metal":
+        # Metals follow forex + Asian demand window
+        if weekday >= 5:
+            return (0 <= total <= 240)
+        asian_metals = (0 <= total <= 300)   # 12AM-5AM
+        london = (420 <= total <= 600)
+        ny = (720 <= total <= 960)
+        return asian_metals or london or ny
+
+    else:
+        # Forex — strict killzones only, weekdays only
+        if weekday >= 5:
+            return False
+        london = (420 <= total <= 600)
+        ny = (720 <= total <= 960)
+        return london or ny
 
 def run_scalp_scan(tv):
     print(f"\n{'='*50}")
     print(f"⚡ ZenSignals SCALP Scanner")
     print(f"{'='*50}")
 
-    if not is_scalp_killzone():
-        print("  Outside killzone — scalp scan skipped")
-        return
-
     session = get_current_session()
     priority = get_priority_symbols(session)
-    # Only scan 4+ star assets for scalp
-    scalp_symbols = [(s, e, t, r) for s, e, t, r in priority if r >= 4]
+    # Only scan 3+ star assets for scalp
+    scalp_symbols = [(s, e, t, r) for s, e, t, r in priority if r >= 3]
     scalp_found = 0
 
     for symbol, exchange, asset_type, rating in scalp_symbols:
         try:
+        if not is_valid_scalp_window(symbol):
+            print(f"  {symbol} — outside valid scalp window")
+            continue
+
             print(f"\n⚡ Scalp {symbol} (⭐×{rating})...")
 
             df_1h = get_data(tv, symbol, exchange, "1H")

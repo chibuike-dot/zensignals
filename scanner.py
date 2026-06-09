@@ -2591,7 +2591,7 @@ def run_scan_enhanced(tv):
             continue
 
         # Forex session check
-        if asset_type == "forex" and False  # DEBUG: bypass forex session:
+        if asset_type == "forex" and False:  # DEBUG: bypass forex session
             print(f"  Skipping — forex market closed")
             continue
 

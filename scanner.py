@@ -712,7 +712,7 @@ def run_scan(tv):
             print(f"  Skipping — forex market closed")
             continue
         tf_data = fetch_all_timeframes(tv, symbol, exchange)
-        if len(tf_data) < 2:
+        if len(tf_data) < 1:
             print(f"  Insufficient data")
             continue
         ref_tf = "1H" if "1H" in tf_data else list(tf_data.keys())[0]
@@ -1833,7 +1833,7 @@ def run_scan_enhanced(tv):
 
         # Fetch all timeframes
         tf_data = fetch_all_timeframes(tv, symbol, exchange)
-        if len(tf_data) < 2:
+        if len(tf_data) < 1:
             print(f"  Insufficient data")
             continue
 
@@ -2597,7 +2597,7 @@ def run_scan_enhanced(tv):
 
         # Fetch all timeframes
         tf_data = fetch_all_timeframes(tv, symbol, exchange)
-        if len(tf_data) < 2:
+        if len(tf_data) < 1:
             print(f"  Insufficient data")
             continue
 

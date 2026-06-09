@@ -226,7 +226,7 @@ def is_forex_session():
         return False
     return True
 
-def get_current_session():
+def get_killzone_session():
     utc_hour = datetime.now(pytz.utc).hour
     for name, (start, end) in KILLZONES.items():
         if start <= utc_hour < end:
@@ -234,7 +234,7 @@ def get_current_session():
     return None
 
 def is_in_killzone():
-    return get_current_session() is not None
+    return get_killzone_session() is not None
 
 def load_memory():
     if os.path.exists(SIGNAL_MEMORY_FILE):
@@ -624,7 +624,7 @@ def score_symbol(symbol, exchange, asset_type, tf_data, indicators):
         score += 1
         notes.append(f"Stoch {stoch_k} overbought ✅ (+1)")
 
-    session = get_current_session()
+    session = get_killzone_session()
     if session:
         score += 1
         notes.append(f"Killzone: {session} ✅ (+1)")
@@ -1955,4 +1955,795 @@ if __name__ == "__main__":
     from tvDatafeed import TvDatafeed
     print("🚀 ZenSignals Pro starting...")
     tv = TvDatafeed()
-    run_scan_enhanced(tv)
+    run_scan_full(tv)
+
+# ============================================================
+# SESSION DETECTOR + ASSET PRIORITIZATION
+# ============================================================
+
+# Asset session ratings (1-5, 0=skip)
+SESSION_RATINGS = {
+    "london": {
+        "EURUSD": 3, "GBPUSD": 5, "USDJPY": 2,
+        "AUDUSD": 1, "USDCAD": 1, "USDCHF": 2,
+        "GBPJPY": 5, "EURJPY": 4, "EURGBP": 4,
+        "NZDUSD": 1, "XAUUSD": 4, "XAGUSD": 3,
+        "BTCUSD": 2, "ETHUSD": 2, "SOLUSD": 2,
+        "BNBUSD": 2, "XRPUSD": 2,
+    },
+    "new_york": {
+        "EURUSD": 3, "GBPUSD": 3, "USDJPY": 4,
+        "AUDUSD": 2, "USDCAD": 4, "USDCHF": 3,
+        "GBPJPY": 2, "EURJPY": 2, "EURGBP": 1,
+        "NZDUSD": 1, "XAUUSD": 4, "XAGUSD": 3,
+        "BTCUSD": 5, "ETHUSD": 5, "SOLUSD": 4,
+        "BNBUSD": 4, "XRPUSD": 4,
+    },
+    "overlap": {
+        "EURUSD": 5, "GBPUSD": 5, "USDJPY": 5,
+        "AUDUSD": 2, "USDCAD": 4, "USDCHF": 4,
+        "GBPJPY": 3, "EURJPY": 3, "EURGBP": 2,
+        "NZDUSD": 1, "XAUUSD": 5, "XAGUSD": 4,
+        "BTCUSD": 5, "ETHUSD": 5, "SOLUSD": 4,
+        "BNBUSD": 4, "XRPUSD": 4,
+    },
+    "asian": {
+        "EURUSD": 0, "GBPUSD": 0, "USDJPY": 3,
+        "AUDUSD": 4, "USDCAD": 0, "USDCHF": 0,
+        "GBPJPY": 1, "EURJPY": 2, "EURGBP": 0,
+        "NZDUSD": 4, "XAUUSD": 2, "XAGUSD": 1,
+        "BTCUSD": 1, "ETHUSD": 1, "SOLUSD": 1,
+        "BNBUSD": 1, "XRPUSD": 1,
+    },
+    "off": {
+        "EURUSD": 0, "GBPUSD": 0, "USDJPY": 0,
+        "AUDUSD": 0, "USDCAD": 0, "USDCHF": 0,
+        "GBPJPY": 0, "EURJPY": 0, "EURGBP": 0,
+        "NZDUSD": 0, "XAUUSD": 0, "XAGUSD": 0,
+        "BTCUSD": 2, "ETHUSD": 2, "SOLUSD": 1,
+        "BNBUSD": 1, "XRPUSD": 1,
+    },
+}
+
+# Threshold per rating
+RATING_THRESHOLD = {
+    5: 11,  # Peak liquidity — lowest threshold
+    4: 13,  # High liquidity
+    3: 15,  # Normal
+    2: 18,  # Low liquidity — higher threshold
+    1: 21,  # Very low — very strict
+    0: 999, # Skip
+}
+
+RATING_LABEL = {
+    5: "⭐⭐⭐⭐⭐ Peak liquidity",
+    4: "⭐⭐⭐⭐ High liquidity",
+    3: "⭐⭐⭐ Normal liquidity",
+    2: "⭐⭐ Low liquidity",
+    1: "⭐ Very low liquidity",
+    0: "❌ Skip — no liquidity",
+}
+
+
+def get_current_session():
+    """
+    Returns current session name based on UTC time
+    Handles overlap, Friday close, Monday open
+    """
+    now = datetime.utcnow()
+    hour = now.hour
+    minute = now.minute
+    weekday = now.weekday()  # 0=Monday, 6=Sunday
+    total_mins = hour * 60 + minute
+
+    # Weekend — only crypto
+    if weekday == 5:  # Saturday
+        return "off"
+    if weekday == 6:  # Sunday
+        if total_mins < 21 * 60:  # Before 9PM UTC Sunday
+            return "off"
+        else:
+            return "monday_open"  # Forex reopening
+
+    # Friday close — after 8PM UTC
+    if weekday == 4 and total_mins >= 20 * 60:
+        return "off"
+
+    # Monday open gap risk — first 30 mins
+    if weekday == 0 and total_mins < 30:
+        return "monday_open"
+
+    # Session detection (UTC)
+    if 0 <= hour < 7:
+        return "asian"
+    elif 7 <= hour < 12:
+        return "london"
+    elif 12 <= hour < 16:
+        return "overlap"
+    elif 16 <= hour < 20:
+        return "new_york"
+    else:
+        return "off"
+
+
+def get_session_label(session):
+    labels = {
+        "asian": "🌏 Asian Session",
+        "london": "🇬🇧 London Session",
+        "overlap": "🔥 London/NY Overlap",
+        "new_york": "🗽 New York Session",
+        "off": "😴 Off Session",
+        "monday_open": "⚠️ Monday Open (Gap Risk)",
+    }
+    return labels.get(session, session)
+
+
+def get_asset_rating(symbol, session):
+    """
+    Returns liquidity rating for asset in current session
+    """
+    # Overlap uses overlap ratings
+    # Monday open uses higher thresholds
+    if session == "monday_open":
+        base = SESSION_RATINGS.get("london", {}).get(symbol, 0)
+        return max(0, base - 1)  # Reduce by 1 star for gap risk
+
+    session_map = {
+        "london": "london",
+        "new_york": "new_york",
+        "overlap": "overlap",
+        "asian": "asian",
+        "off": "off",
+    }
+    key = session_map.get(session, "off")
+    return SESSION_RATINGS.get(key, {}).get(symbol, 0)
+
+
+def get_scan_threshold(symbol, session, base_threshold=15):
+    """
+    Returns dynamic scan threshold based on
+    asset rating in current session
+    """
+    rating = get_asset_rating(symbol, session)
+
+    # Monday open — add 3 to threshold
+    if session == "monday_open":
+        return RATING_THRESHOLD.get(rating, 999) + 3
+
+    return RATING_THRESHOLD.get(rating, 999)
+
+
+def get_priority_symbols(session):
+    """
+    Returns symbols sorted by session rating
+    Highest rated first, skips 0-rated assets
+    """
+    rated = []
+    for symbol, exchange, asset_type in SYMBOLS:
+        rating = get_asset_rating(symbol, session)
+        if rating > 0:
+            rated.append((rating, symbol, exchange, asset_type))
+
+    # Sort by rating descending
+    rated.sort(key=lambda x: x[0], reverse=True)
+    return [(s, e, t, r) for r, s, e, t in rated]
+
+# ============================================================
+# PART 2: CORRELATION + HEDGE + GROUP ENGINE
+# ============================================================
+
+# Asset groups
+ASSET_GROUPS = {
+    "USD_Basket": {
+        "assets": ["EURUSD", "GBPUSD", "AUDUSD", "NZDUSD"],
+        "direction": "inverse",  # These move OPPOSITE to USD
+        "hedge": ["USDJPY", "USDCAD", "USDCHF"],
+        "hedge_direction": "same",  # Hedges move WITH USD
+    },
+    "GBP_Basket": {
+        "assets": ["GBPUSD", "GBPJPY", "EURGBP"],
+        "direction": "same",
+        "hedge": ["EURUSD"],
+        "hedge_direction": "inverse",
+    },
+    "JPY_Basket": {
+        "assets": ["USDJPY", "GBPJPY", "EURJPY"],
+        "direction": "same",
+        "hedge": ["XAUUSD"],
+        "hedge_direction": "inverse",
+    },
+    "Commodity_FX": {
+        "assets": ["AUDUSD", "NZDUSD"],
+        "direction": "same",
+        "hedge": ["USDCAD"],
+        "hedge_direction": "inverse",
+    },
+    "Metals": {
+        "assets": ["XAUUSD", "XAGUSD"],
+        "direction": "same",
+        "hedge": ["USDJPY"],
+        "hedge_direction": "inverse",
+    },
+    "Crypto_Majors": {
+        "assets": ["BTCUSD", "ETHUSD", "SOLUSD", "BNBUSD", "XRPUSD"],
+        "direction": "same",
+        "hedge": ["XAUUSD"],
+        "hedge_direction": "inverse",
+    },
+}
+
+# Conviction labels
+CONVICTION_LABELS = {
+    (90, 100): "🏆 EXTREMELY HIGH",
+    (75, 89):  "⭐ VERY HIGH",
+    (60, 74):  "✅ HIGH",
+    (45, 59):  "📊 MODERATE",
+    (30, 44):  "⚠️ LOW",
+    (0,  29):  "❌ VERY LOW",
+}
+
+def get_conviction_label(score):
+    for (low, high), label in CONVICTION_LABELS.items():
+        if low <= score <= high:
+            return label
+    return "❌ VERY LOW"
+
+
+def get_asset_group(symbol):
+    """Returns which group an asset belongs to"""
+    for group_name, group_data in ASSET_GROUPS.items():
+        if symbol in group_data["assets"]:
+            return group_name, group_data
+    return None, None
+
+
+def calc_dxy_bias(signal_cache):
+    """
+    Calculates DXY proxy from major pairs
+    EURUSD(57.6%) + USDJPY(13.6%) + GBPUSD(11.9%)
+    + USDCAD(9.1%) + USDCHF(3.6%) + NZDUSD(4.2%)
+    """
+    weights = {
+        "EURUSD": -0.576,  # Negative = inverse
+        "USDJPY":  0.136,
+        "GBPUSD": -0.119,
+        "USDCAD":  0.091,
+        "USDCHF":  0.036,
+        "NZDUSD": -0.042,
+    }
+
+    score = 0
+    count = 0
+    for symbol, weight in weights.items():
+        if symbol in signal_cache:
+            direction = signal_cache[symbol]
+            # BUY EURUSD = USD weak = negative DXY
+            val = 1 if direction == "BUY" else -1
+            score += val * weight
+            count += 1
+
+    if count == 0:
+        return "NEUTRAL"
+
+    if score > 0.05:
+        return "USD_STRONG"
+    elif score < -0.05:
+        return "USD_WEAK"
+    else:
+        return "NEUTRAL"
+
+
+def detect_risk_environment(signal_cache):
+    """
+    Risk-on: crypto up + JPY weak + gold flat
+    Risk-off: crypto down + JPY strong + gold up
+    """
+    gold_dir = signal_cache.get("XAUUSD")
+    btc_dir = signal_cache.get("BTCUSD")
+    jpy_pairs = [
+        signal_cache.get("USDJPY"),
+        signal_cache.get("GBPJPY"),
+        signal_cache.get("EURJPY"),
+    ]
+    jpy_sells = sum(1 for d in jpy_pairs if d == "SELL")
+
+    # Risk-off: gold up + JPY strong (USDJPY selling) + crypto down
+    if gold_dir == "BUY" and jpy_sells >= 2 and btc_dir == "SELL":
+        return "RISK_OFF"
+
+    # Risk-on: gold flat/down + JPY weak + crypto up
+    if btc_dir == "BUY" and jpy_sells == 0:
+        return "RISK_ON"
+
+    return "NEUTRAL"
+
+
+def calc_correlation_score(symbol, direction, signal_cache):
+    """
+    Calculates correlation and hedge scores
+    for a given signal
+    """
+    group_name, group_data = get_asset_group(symbol)
+
+    if group_name is None:
+        return {
+            "group": "None",
+            "correlation_score": 0,
+            "hedge_score": 0,
+            "conviction": 0,
+            "conviction_label": "❌ No group",
+            "correlated_assets": [],
+            "hedge_assets": [],
+        }
+
+    # Check correlated assets
+    group_assets = [a for a in group_data["assets"] if a != symbol]
+    corr_agree = []
+    corr_disagree = []
+
+    for asset in group_assets:
+        if asset not in signal_cache:
+            continue
+        asset_dir = signal_cache[asset]
+        group_dir = group_data["direction"]
+
+        # Same direction group
+        if group_dir == "same":
+            if asset_dir == direction:
+                corr_agree.append(f"✅ {asset}: {asset_dir}")
+            else:
+                corr_disagree.append(f"❌ {asset}: {asset_dir}")
+        # Inverse direction group
+        else:
+            opposite = "SELL" if direction == "BUY" else "BUY"
+            if asset_dir == opposite:
+                corr_agree.append(f"✅ {asset}: {asset_dir}")
+            else:
+                corr_disagree.append(f"❌ {asset}: {asset_dir}")
+
+    # Correlation score
+    total_corr = len(group_assets)
+    checked_corr = len(corr_agree) + len(corr_disagree)
+    corr_score = (len(corr_agree) / checked_corr * 100) if checked_corr > 0 else 50
+
+    # Check hedge assets
+    hedge_assets = group_data.get("hedge", [])
+    hedge_agree = []
+    hedge_disagree = []
+
+    for asset in hedge_assets:
+        if asset not in signal_cache:
+            continue
+        asset_dir = signal_cache[asset]
+        hedge_dir = group_data.get("hedge_direction", "inverse")
+
+        if hedge_dir == "inverse":
+            opposite = "SELL" if direction == "BUY" else "BUY"
+            if asset_dir == opposite:
+                hedge_agree.append(f"✅ {asset}: {asset_dir}")
+            else:
+                hedge_disagree.append(f"❌ {asset}: {asset_dir}")
+        else:
+            if asset_dir == direction:
+                hedge_agree.append(f"✅ {asset}: {asset_dir}")
+            else:
+                hedge_disagree.append(f"❌ {asset}: {asset_dir}")
+
+    # Hedge score
+    checked_hedge = len(hedge_agree) + len(hedge_disagree)
+    hedge_score = (len(hedge_agree) / checked_hedge * 100) if checked_hedge > 0 else 50
+
+    # Final conviction
+    conviction = round((corr_score + hedge_score) / 2, 1)
+    conviction_label = get_conviction_label(conviction)
+
+    return {
+        "group": group_name,
+        "correlation_score": round(corr_score, 1),
+        "hedge_score": round(hedge_score, 1),
+        "conviction": conviction,
+        "conviction_label": conviction_label,
+        "correlated_assets": corr_agree + corr_disagree,
+        "hedge_assets": hedge_agree + hedge_disagree,
+    }
+
+
+def get_group_trade_recommendation(symbol, direction, signal_cache):
+    """
+    Recommends group trade and hedge positions
+    """
+    group_name, group_data = get_asset_group(symbol)
+    if not group_name:
+        return None
+
+    # Find all agreeing group members
+    group_trades = []
+    for asset in group_data["assets"]:
+        if asset == symbol:
+            group_trades.append(f"• {asset} {direction} ⭐ (primary)")
+            continue
+        if asset in signal_cache and signal_cache[asset] == direction:
+            group_trades.append(f"• {asset} {direction} ✅")
+
+    # Find hedge positions
+    hedge_trades = []
+    for asset in group_data.get("hedge", []):
+        if asset in signal_cache:
+            hedge_dir = signal_cache[asset]
+            hedge_trades.append(f"• {asset} {hedge_dir} 🔀")
+
+    return {
+        "group_name": group_name,
+        "group_trades": group_trades,
+        "hedge_trades": hedge_trades,
+    }
+
+# ============================================================
+# PART 3: FULL ENHANCED FORMATTER WITH CORRELATION + SESSION
+# ============================================================
+
+def format_signal_full(
+    result, tf_model, duration, volatility,
+    swing_seq, momentum, news,
+    session, session_label, rating, rating_label,
+    correlation, group_rec, dxy_bias, risk_env
+):
+    direction = result['direction']
+    emoji = "🟢" if direction == "BUY" else "🔴"
+    arrow = "⬆️" if direction == "BUY" else "⬇️"
+    rr = result['rr_data']
+    ind = result['indicators']
+
+    type_emoji = {
+        "Micro Scalp": "⚡", "Scalp": "⚡",
+        "Intraday Scalp": "🎯", "Intraday": "📊",
+        "Swing": "🌊", "Position": "🏦",
+    }.get(duration['trade_type'], "📊")
+
+    vol_emoji = {
+        "HIGH": "🔥", "NORMAL": "✅",
+        "LOW": "🐢", "SPIKE": "🚨",
+        "INDECISION": "⚠️",
+    }.get(volatility['state'], "✅")
+
+    mom_emoji = {
+        "VERY_HIGH": "🚀", "HIGH": "⚡",
+        "MEDIUM": "📈", "LOW": "🐌",
+    }.get(momentum['state'], "📈")
+
+    swing_emoji = {
+        "BULLISH_TREND": "📈", "BEARISH_TREND": "📉",
+        "CHOPPY_EXPANDING": "⚠️", "CHOPPY_CONTRACTING": "🔄",
+        "WEAKENING_BULL": "⚠️", "WEAKENING_BEAR": "⚠️",
+        "REVERSAL_FORMING": "🔄",
+    }.get(swing_seq['trend'], "📊")
+
+    risk_emoji = {
+        "RISK_ON": "🟢", "RISK_OFF": "🔴", "NEUTRAL": "⚪",
+    }.get(risk_env, "⚪")
+
+    dxy_emoji = {
+        "USD_STRONG": "💪", "USD_WEAK": "📉", "NEUTRAL": "⚪",
+    }.get(dxy_bias, "⚪")
+
+    itf_status = "✅" if tf_model['itf_confirmed'] else "⏳"
+    ttf_status = "✅" if tf_model['ttf_triggered'] else "⏳"
+
+    news_line = news.get('message', 'No news data')
+    news_action = news.get('action', '')
+
+    msg = (
+        f"{emoji} <b>ZenSignals Pro Alert</b> {arrow}\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"📌 Pair: <b>{result['symbol']}</b>\n"
+        f"📍 Signal: <b>{direction}</b>\n"
+        f"📊 Score: <b>{result['score']}/24</b>\n"
+        f"🔄 Phase: <b>{result['phase']}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"🕐 SESSION\n"
+        f"{session_label}\n"
+        f"{rating_label}\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"{type_emoji} Trade Type: <b>{duration['trade_type']}</b>\n"
+        f"🟢 Start: <b>{duration['start_time']}</b>\n"
+        f"🔴 Est. End: <b>{duration['end_time']}</b>\n"
+        f"⏳ Duration: <b>~{duration['adjusted_hours']}h</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"📊 TIMEFRAME MODEL\n"
+        f"🔵 CTF ({tf_model['ctf_label']}): Bias confirmed\n"
+        f"🟡 ITF ({tf_model['itf_label']}): {itf_status}\n"
+        f"🟢 TTF ({tf_model['ttf_label']}): {ttf_status}\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"📈 MARKET STRUCTURE\n"
+        f"{swing_emoji} Sequence: <b>{swing_seq['sequence']}</b>\n"
+        f"📊 Trend: <b>{swing_seq['trend']}</b>\n"
+        f"{vol_emoji} Volatility: <b>{volatility['state']}</b> "
+        f"(ATR {volatility['atr_ratio']}×)\n"
+        f"🕯 Conviction: <b>{volatility['conviction']}%</b>\n"
+        f"{mom_emoji} Momentum: <b>{momentum['state']}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"💰 Entry: <b>{rr['entry']}</b>\n"
+        f"🛑 SL: <b>{rr['sl']}</b>\n"
+        f"🎯 TP1 (1:2): <b>{rr['tp1']}</b>\n"
+        f"🏆 TP2 (1:3): <b>{rr['tp2']}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"📈 RSI: <b>{ind['rsi']}</b>\n"
+        f"📉 Stoch: <b>{ind['stoch_k']}</b>\n"
+        f"💪 ADX: <b>{ind['adx']}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"🔗 CORRELATION\n"
+        f"👥 Group: <b>{correlation['group']}</b>\n"
+        f"📊 Corr: <b>{correlation['correlation_score']}%</b>\n"
+        f"🔀 Hedge: <b>{correlation['hedge_score']}%</b>\n"
+        f"🏆 Conviction: <b>{correlation['conviction_label']}</b>\n"
+    )
+
+    # Correlated assets
+    if correlation['correlated_assets']:
+        msg += "━━━━━━━━━━━━━━━━━━\n"
+        msg += "🔗 CORRELATED ASSETS\n"
+        for a in correlation['correlated_assets'][:4]:
+            msg += f"{a}\n"
+
+    # Hedge assets
+    if correlation['hedge_assets']:
+        msg += "🔀 HEDGE POSITIONS\n"
+        for a in correlation['hedge_assets'][:3]:
+            msg += f"{a}\n"
+
+    # Group trade recommendation
+    if group_rec and len(group_rec['group_trades']) > 1:
+        msg += (
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"👥 GROUP TRADE\n"
+        )
+        for t in group_rec['group_trades'][:4]:
+            msg += f"{t}\n"
+        msg += "⚡ Reduce each to 0.5× size\n"
+
+    # Hedge recommendation
+    if group_rec and group_rec['hedge_trades']:
+        msg += "🔀 HEDGE OPPORTUNITY\n"
+        for t in group_rec['hedge_trades'][:2]:
+            msg += f"{t}\n"
+
+    # Market environment
+    msg += (
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"🌍 MARKET ENVIRONMENT\n"
+        f"{risk_emoji} Risk: <b>{risk_env}</b>\n"
+        f"{dxy_emoji} DXY: <b>{dxy_bias}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"📰 NEWS: {news_line}\n"
+    )
+
+    if news_action:
+        msg += f"⚡ Action: <i>{news_action}</i>\n"
+
+    msg += (
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"🕐 Time: <b>{duration['start_time']}</b>\n"
+        f"⚠️ <i>Always confirm before entering</i>"
+    )
+
+    return msg
+
+# ============================================================
+# PART 4: FINAL RUN_SCAN_FULL — CONNECTS EVERYTHING
+# ============================================================
+
+def run_scan_full(tv):
+    print(f"\n{'='*50}")
+    print(f"ZenSignals Pro FULL — {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC")
+    print(f"{'='*50}")
+
+    memory = load_memory()
+    signals_found = 0
+
+    # Get current session
+    session = get_current_session()
+    session_label = get_session_label(session)
+    print(f"\n{session_label}")
+
+    # Get priority-sorted symbols for this session
+    priority_symbols = get_priority_symbols(session)
+    print(f"Scanning {len(priority_symbols)} assets for {session} session")
+
+    # Signal cache for correlation
+    signal_cache = {}
+
+    # First pass — quick bias scan to build signal cache
+    print("\nBuilding signal cache for correlation...")
+    for symbol, exchange, asset_type, rating in priority_symbols:
+        if rating < 2:
+            continue
+        try:
+            df = get_data(tv, symbol, exchange, "1H")
+            if df is None:
+                continue
+            bos = detect_bos(df)
+            if bos:
+                signal_cache[symbol] = bos
+            time.sleep(0.5)
+        except:
+            continue
+
+    # Calculate market-wide metrics
+    dxy_bias = calc_dxy_bias(signal_cache)
+    risk_env = detect_risk_environment(signal_cache)
+    print(f"DXY: {dxy_bias} | Risk: {risk_env}")
+
+    # Second pass — full analysis on priority assets
+    for symbol, exchange, asset_type, rating in priority_symbols:
+
+        print(f"\n🔍 Scanning {symbol} (⭐×{rating})...")
+
+        # Get dynamic threshold
+        threshold = get_scan_threshold(symbol, session)
+        if threshold >= 999:
+            print(f"  Skipping — no liquidity this session")
+            continue
+
+        # Forex session check
+        if asset_type == "forex" and session in ("off",):
+            print(f"  Skipping — forex market closed")
+            continue
+
+        # Fetch all timeframes
+        tf_data = fetch_all_timeframes(tv, symbol, exchange)
+        if len(tf_data) < 2:
+            print(f"  Insufficient data")
+            continue
+
+        # Get ref dataframe
+        ref_tf = "1H" if "1H" in tf_data else list(tf_data.keys())[0]
+        ref_df = tf_data[ref_tf]
+
+        # Get indicators
+        indicators = get_indicators(ref_df)
+
+        # Score with dynamic threshold
+        result = score_symbol(
+            symbol, exchange, asset_type,
+            tf_data, indicators,
+        )
+
+        if result is None:
+            continue
+
+        # Apply session threshold
+        if result['score'] < threshold:
+            print(f"  Score {result['score']} below session threshold {threshold}")
+            continue
+
+        direction = result['direction']
+
+        # Cooldown check
+        current_price = result['rr_data']['entry']
+        current_atr = result['indicators']['atr']
+        if is_on_cooldown(symbol, direction, current_price, memory):
+            print(f"  Price hasn't moved enough — skipping")
+            continue
+
+        # Enhanced analysis
+        volatility = get_volatility_state(ref_df)
+        swing_seq = analyze_swing_sequence(ref_df)
+        momentum = get_momentum_state(ref_df, indicators)
+        tf_model = get_ctf_itf_ttf(tf_data, direction)
+        duration = calculate_duration(
+            tf_model['ctf'], tf_data, direction,
+            volatility, swing_seq, momentum,
+            tf_model['itf_confirmed'],
+            tf_model['ttf_triggered'],
+            asset_type
+        )
+
+        # News check
+        news_events = get_relevant_news(symbol, hours_ahead=4)
+        news = assess_news_impact(symbol, direction, news_events)
+
+        # Skip if news suspension
+        if news['suspend']:
+            print(f"  News suspension: {news['message']}")
+            continue
+
+        # Skip choppy + indecision
+        if swing_seq['trend'] in ("CHOPPY_EXPANDING",) and volatility['state'] == "INDECISION":
+            print(f"  Choppy + indecision — skipping")
+            continue
+
+        # Correlation analysis
+        correlation = calc_correlation_score(symbol, direction, signal_cache)
+        group_rec = get_group_trade_recommendation(symbol, direction, signal_cache)
+
+        # Rating info
+        rating_label = RATING_LABEL.get(rating, "")
+
+        # Format full signal
+        msg = format_signal_full(
+            result, tf_model, duration,
+            volatility, swing_seq, momentum, news,
+            session, session_label, rating, rating_label,
+            correlation, group_rec, dxy_bias, risk_env
+        )
+
+        send_telegram(msg)
+
+        # Update memory
+        update_memory(
+            symbol, direction,
+            result['rr_data']['entry'],
+            result['indicators']['atr'],
+            memory
+        )
+
+        # Save to Supabase
+        supabase_insert({
+            "symbol": symbol,
+            "direction": direction,
+            "score": result['score'],
+            "phase": result['phase'],
+            "session": session_label,
+            "entry": result['rr_data']['entry'],
+            "sl": result['rr_data']['sl'],
+            "tp1": result['rr_data']['tp1'],
+            "tp2": result['rr_data']['tp2'],
+            "rsi": result['indicators']['rsi'],
+            "stoch": result['indicators']['stoch_k'],
+            "adx": result['indicators']['adx'],
+            "atr": result['indicators']['atr'],
+            "status": "OPEN",
+            "trade_type": duration['trade_type'],
+            "ctf": tf_model['ctf'],
+            "itf": tf_model['itf'],
+            "ttf": tf_model['ttf'],
+            "swing_sequence": swing_seq['sequence'],
+            "volatility_state": volatility['state'],
+            "momentum_state": momentum['state'],
+            "conviction": volatility['conviction'],
+            "estimated_duration_hours": duration['adjusted_hours'],
+            "estimated_end_time": duration['end_time_iso'],
+            "duration_adjustment_log": duration['adjustment_log'],
+            "session_rating": rating,
+            "session_name": session,
+            "liquidity_label": rating_label,
+            "correlation_score": correlation['correlation_score'],
+            "hedge_score": correlation['hedge_score'],
+            "conviction_label": correlation['conviction_label'],
+            "group_name": correlation['group'],
+            "correlated_assets": ", ".join(correlation['correlated_assets']),
+            "hedge_assets": ", ".join(correlation['hedge_assets']),
+            "risk_environment": risk_env,
+            "dxy_bias": dxy_bias,
+            "scan_threshold": threshold,
+        })
+
+        print(f"  ✅ Signal: {direction} {symbol} {result['score']}/24 | ⭐×{rating} | {duration['trade_type']}")
+        signals_found += 1
+        time.sleep(2)
+
+    # Check outcomes
+    check_outcomes(tv)
+
+    # Live updates for open signals
+    open_signals = supabase_get_open_signals()
+    for sig in open_signals:
+        try:
+            created = datetime.fromisoformat(
+                sig.get('created_at', '').replace('Z', '+00:00')
+            ).replace(tzinfo=None)
+            age_mins = (datetime.utcnow() - created).total_seconds() / 60
+            update_count = sig.get('live_update_count', 0)
+            if age_mins > 0 and int(age_mins) % 30 == 0:
+                send_live_update(sig, tv)
+                time.sleep(1)
+        except:
+            pass
+
+    # Hourly status
+    now = datetime.utcnow()
+    if now.minute < 15:
+        send_signal_updates(memory)
+
+    print(f"\nScan complete — {signals_found} signal(s) sent")
+    print(f"Session: {session_label} | DXY: {dxy_bias} | Risk: {risk_env}")

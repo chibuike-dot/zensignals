@@ -2848,6 +2848,7 @@ def run_scalp_scan(tv):
     scalp_found = 0
 
     for symbol, exchange, asset_type, rating in scalp_symbols:
+        try:
         if not is_valid_scalp_window(symbol):
             print(f"  {symbol} — outside valid scalp window")
             continue

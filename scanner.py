@@ -123,7 +123,7 @@ def get_interval(tf_key):
     }
     return mapping[tf_key]
 
-def get_data(tv, symbol, exchange, tf_key, retries=3):
+def get_data(tv, symbol, exchange, tf_key, retries=1):
     interval = get_interval(tf_key)
     for i in range(retries):
         try:

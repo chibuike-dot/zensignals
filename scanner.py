@@ -2122,7 +2122,7 @@ def get_priority_symbols(session):
     rated = []
     for symbol, exchange, asset_type in SYMBOLS:
         rating = get_asset_rating(symbol, session)
-        if rating > 0:
+        if rating >= 0:  # DEBUG: include all
             rated.append((rating, symbol, exchange, asset_type))
 
     # Sort by rating descending

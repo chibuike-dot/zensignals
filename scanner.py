@@ -2994,15 +2994,10 @@ def run_scalp_scan(tv):
 
 if __name__ == "__main__":
     from tvDatafeed import TvDatafeed
-    print("🚀 ZenSignals Pro starting...")
+    print("\U0001f680 ZenSignals Pro starting...")
     tv = TvDatafeed()
     run_scan_enhanced(tv)
     try:
-        try:
         run_scalp_scan(tv)
     except Exception as e:
         print(f"Scalp error: {e}")
-    except Exception as e:
-        print(f"Scalp scan error: {e}")
-
-

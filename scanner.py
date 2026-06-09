@@ -239,7 +239,7 @@ def get_killzone_session():
     return None
 
 def is_in_killzone():
-    return True  # DEBUG: bypass killzone
+    now = __import__("datetime").datetime.utcnow(); hour = now.hour; return (2 <= hour < 5) or (12 <= hour < 17) or (18 <= hour < 22)
 
 def load_memory():
     if os.path.exists(SIGNAL_MEMORY_FILE):
@@ -3055,3 +3055,9 @@ def run_scalp_scan(tv):
 
     print(f"\n⚡ Scalp scan complete — {found} signal(s)")
 
+
+if __name__ == "__main__":
+    from tvDatafeed import TvDatafeed, Interval
+    tv = TvDatafeed()
+    run_scan(tv)
+    run_scalp_scan(tv)

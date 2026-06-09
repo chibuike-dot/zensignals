@@ -2931,7 +2931,76 @@ def run_scalp_scan(tv):
                     score += 5
                     reasons.append(f"ADX trending {adx} ✅")
 
-                # Minimum score 70/100
+        
+        # 10. Delta approximation (buying/selling pressure)
+        try:
+            high = df_15m["high"]
+            low = df_15m["low"]
+            close = df_15m["close"]
+            candle_range = high.iloc[-1] - low.iloc[-1]
+            if candle_range > 0:
+                delta = (close.iloc[-1] - low.iloc[-1]) / candle_range
+                if direction == "BUY" and delta > 0.7:
+                    score += 15
+                    reasons.append(f"Delta bullish {delta:.2f}")
+                elif direction == "SELL" and delta < 0.3:
+                    score += 15
+                    reasons.append(f"Delta bearish {delta:.2f}")
+        except Exception:
+            pass
+
+        # 11. Volume anomaly (institutional participation)
+        try:
+            vol = df_15m["volume"]
+            avg_vol = vol.iloc[-20:-1].mean()
+            if avg_vol > 0 and vol.iloc[-1] > avg_vol * 2:
+                score += 10
+                reasons.append(f"Vol spike {vol.iloc[-1]/avg_vol:.1f}x")
+        except Exception:
+            pass
+
+        # 12. Wick rejection at OB
+        try:
+            body = abs(df_15m["close"].iloc[-1] - df_15m["open"].iloc[-1])
+            candle_range = df_15m["high"].iloc[-1] - df_15m["low"].iloc[-1]
+            if candle_range > 0:
+                wick_ratio = 1 - (body / candle_range)
+                if wick_ratio > 0.6:
+                    score += 10
+                    reasons.append(f"Wick rejection {wick_ratio:.2f}")
+        except Exception:
+            pass
+
+        # 13. Price efficiency ratio (directional conviction)
+        try:
+            closes = df_15m["close"].iloc[-10:]
+            net = abs(closes.iloc[-1] - closes.iloc[0])
+            total = closes.diff().abs().sum()
+            if total > 0:
+                efficiency = net / total
+                if efficiency > 0.6:
+                    score += 10
+                    reasons.append(f"Efficiency {efficiency:.2f}")
+        except Exception:
+            pass
+
+        # 14. Sweep + absorption (institutional stop hunt)
+        try:
+            recent_high = df_15m["high"].iloc[-20:-2].max()
+            recent_low = df_15m["low"].iloc[-20:-2].min()
+            last_high = df_15m["high"].iloc[-2]
+            last_low = df_15m["low"].iloc[-2]
+            last_close = df_15m["close"].iloc[-1]
+            if direction == "BUY" and last_low < recent_low and last_close > recent_low:
+                score += 15
+                reasons.append("Sweep+absorption BUY")
+            elif direction == "SELL" and last_high > recent_high and last_close < recent_high:
+                score += 15
+                reasons.append("Sweep+absorption SELL")
+        except Exception:
+            pass
+
+        # Minimum score 70/100
                 if score < 70:
                     print(f"  Score {score}/100 — below scalp threshold")
                     continue

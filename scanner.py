@@ -2533,7 +2533,7 @@ def format_signal_full(
 # PART 4: FINAL RUN_SCAN_FULL — CONNECTS EVERYTHING
 # ============================================================
 
-def run_scan_full(tv):
+def run_scan_enhanced(tv):
     print(f"\n{'='*50}")
     print(f"ZenSignals Pro FULL — {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC")
     print(f"{'='*50}")
@@ -2996,9 +2996,12 @@ if __name__ == "__main__":
     from tvDatafeed import TvDatafeed
     print("🚀 ZenSignals Pro starting...")
     tv = TvDatafeed()
-    run_scan_full(tv)
+    run_scan_enhanced(tv)
     try:
+        try:
         run_scalp_scan(tv)
+    except Exception as e:
+        print(f"Scalp error: {e}")
     except Exception as e:
         print(f"Scalp scan error: {e}")
 

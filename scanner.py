@@ -3000,9 +3000,9 @@ def run_scalp_scan(tv):
             pass
 
         # Minimum score 70/100
-                if score < 70:
-                    print(f"  Score {score}/100 — below scalp threshold")
-                    continue
+        if score < 100:
+            print(f"  Score {score}/160 — below scalp threshold")
+            continue
 
                 # Cooldown check
                 cooldown_key = f"{symbol}_scalp"

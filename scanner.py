@@ -2618,7 +2618,7 @@ def run_scan_enhanced(tv):
             continue
 
         # Apply session threshold
-        if result['score'] < 8  # DEBUG:
+        if result['score'] < 8:  # DEBUG: hardcoded minimum
             print(f"  Score {result['score']} below session threshold {threshold}")
             continue
 

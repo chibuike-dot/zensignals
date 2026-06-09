@@ -1951,12 +1951,6 @@ def run_scan_enhanced(tv):
     print(f"\nScan complete — {signals_found} signal(s) sent")
 
 
-if __name__ == "__main__":
-    from tvDatafeed import TvDatafeed
-    print("🚀 ZenSignals Pro starting...")
-    tv = TvDatafeed()
-    run_scan_full(tv)
-
 # ============================================================
 # SESSION DETECTOR + ASSET PRIORITIZATION
 # ============================================================
@@ -2747,3 +2741,11 @@ def run_scan_full(tv):
 
     print(f"\nScan complete — {signals_found} signal(s) sent")
     print(f"Session: {session_label} | DXY: {dxy_bias} | Risk: {risk_env}")
+
+if __name__ == "__main__":
+    from tvDatafeed import TvDatafeed
+    print("🚀 ZenSignals Pro starting...")
+    tv = TvDatafeed()
+    run_scan_enhanced(tv)
+    run_scalp_scan(tv)
+

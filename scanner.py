@@ -2989,7 +2989,7 @@ def run_scalp_scan(tv):
                 pass
 
             # Minimum score
-            if score < 100:
+            if score < 60:
                 print(f"  Score {score}/160 — below threshold")
                 continue
 

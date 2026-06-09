@@ -2018,7 +2018,7 @@ RATING_THRESHOLD = {
     3: 15,  # Normal
     2: 18,  # Low liquidity — higher threshold
     1: 21,  # Very low — very strict
-    0: 999, # Skip
+    0: 8,   # DEBUG: was Skip
 }
 
 RATING_LABEL = {
@@ -2105,7 +2105,7 @@ def get_asset_rating(symbol, session):
     return SESSION_RATINGS.get(key, {}).get(symbol, 0)
 
 
-def get_scan_threshold(symbol, session, base_threshold=15):
+def get_scan_threshold(symbol, session, base_threshold=8):
     """
     Returns dynamic scan threshold based on
     asset rating in current session
@@ -2586,12 +2586,12 @@ def run_scan_enhanced(tv):
 
         # Get dynamic threshold
         threshold = get_scan_threshold(symbol, session)
-        if threshold >= 999:
+        if threshold >= 999 and False:  # DEBUG: disabled skip
             print(f"  Skipping — no liquidity this session")
             continue
 
         # Forex session check
-        if asset_type == "forex" and session in ("off",):
+        if asset_type == "forex" and False  # DEBUG: bypass forex session:
             print(f"  Skipping — forex market closed")
             continue
 
@@ -2618,7 +2618,7 @@ def run_scan_enhanced(tv):
             continue
 
         # Apply session threshold
-        if result['score'] < threshold:
+        if result['score'] < 8  # DEBUG:
             print(f"  Score {result['score']} below session threshold {threshold}")
             continue
 

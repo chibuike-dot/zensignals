@@ -2838,235 +2838,215 @@ def is_valid_scalp_window(symbol):
 
 def run_scalp_scan(tv):
     print(f"\n{'='*50}")
-    print(f"⚡ ZenSignals SCALP Scanner")
-    print(f"{'='*50}")
-
+    print("⚡ ZenSignals SCALP Scanner")
+    found = 0
     session = get_current_session()
     priority = get_priority_symbols(session)
-    # Only scan 3+ star assets for scalp
     scalp_symbols = [(s, e, t, r) for s, e, t, r in priority if r >= 3]
-    scalp_found = 0
 
     for symbol, exchange, asset_type, rating in scalp_symbols:
         try:
             if not is_valid_scalp_window(symbol):
-                print(f"  {symbol} — outside valid scalp window")
+                print(f"  {symbol} outside scalp window")
                 continue
 
-                print(f"\n⚡ Scalp {symbol} (⭐×{rating})...")
+            print(f"\n⚡ Scalp {symbol} (⭐x{rating})...")
 
-                df_1h = get_data(tv, symbol, exchange, "1H")
-                df_15m = get_data(tv, symbol, exchange, "15M")
-                df_5m = get_data(tv, symbol, exchange, "5M")
+            df_1h = get_data(tv, symbol, exchange, "1H")
+            df_15m = get_data(tv, symbol, exchange, "15M")
+            df_5m = get_data(tv, symbol, exchange, "5M")
 
-                if df_1h is None or df_15m is None:
-                    continue
+            if df_1h is None or df_15m is None:
+                continue
 
-                # HTF bias required
-                htf_bos = detect_bos(df_1h)
-                if htf_bos is None:
-                    continue
+            htf_bos = detect_bos(df_1h)
+            if htf_bos is None:
+                continue
 
-                direction = htf_bos
-                indicators = get_indicators(df_15m)
-                rsi = indicators.get('rsi', 50)
-                stoch = indicators.get('stoch_k', 50)
-                adx = indicators.get('adx', 0)
-                atr = indicators.get('atr', 0.001)
+            direction = htf_bos
+            indicators = get_indicators(df_15m)
+            rsi = indicators.get("rsi", 50)
+            stoch = indicators.get("stoch_k", 50)
+            adx = indicators.get("adx", 0)
+            atr = indicators.get("atr", 0.001)
 
-                score = 0
-                reasons = []
+            score = 0
+            reasons = []
 
-                # 1. Killzone
-                score += 20
-                reasons.append("Killzone ✅")
+            # 1. Kill zone
+            score += 20
+            reasons.append("Killzone ✅")
 
-                # 2. HTF BOS
-                score += 20
-                reasons.append(f"1H BOS {direction} ✅")
+            # 2. HTF BOS
+            score += 20
+            reasons.append(f"1H BOS {direction} ✅")
 
-                # 3. Liquidity sweep on 15M
-                if detect_liquidity_sweep(df_15m, direction):
-                    score += 15
-                    reasons.append("Liquidity sweep ✅")
-                else:
-                    continue
+            # 3. Liquidity sweep on 15M
+            if detect_liquidity_sweep(df_15m, direction):
+                score += 15
+                reasons.append("Liquidity sweep ✅")
+            else:
+                continue
 
-                # 4. CHoCH on 15M
-                choch = detect_choch(df_15m)
-                if choch == direction:
-                    score += 15
-                    reasons.append("CHoCH ✅")
+            # 4. CHoCH on 15M
+            choch = detect_choch(df_15m)
+            if choch == direction:
+                score += 15
+                reasons.append("CHoCH ✅")
 
-                # 5. OB on 15M
-                ob = detect_order_block(df_15m, direction)
-                if ob:
-                    score += 10
-                    reasons.append("Order Block ✅")
-
-                # 6. FVG on 15M
-                fvg = detect_fvg(df_15m, direction)
-                if fvg:
-                    score += 10
-                    reasons.append("FVG ✅")
-
-                # 7. RSI confirmation
-                if direction == "BUY" and rsi < 40:
-                    score += 10
-                    reasons.append(f"RSI oversold {rsi} ✅")
-                elif direction == "SELL" and rsi > 60:
-                    score += 10
-                    reasons.append(f"RSI overbought {rsi} ✅")
-
-                # 8. Stoch confirmation
-                if direction == "BUY" and stoch < 25:
-                    score += 5
-                    reasons.append(f"Stoch oversold {stoch} ✅")
-                elif direction == "SELL" and stoch > 75:
-                    score += 5
-                    reasons.append(f"Stoch overbought {stoch} ✅")
-
-                # 9. ADX trending
-                if adx > 25:
-                    score += 5
-                    reasons.append(f"ADX trending {adx} ✅")
-
-        
-        # 10. Delta approximation (buying/selling pressure)
-            high = df_15m["high"]
-            low = df_15m["low"]
-            close = df_15m["close"]
-            candle_range = high.iloc[-1] - low.iloc[-1]
-            if candle_range > 0:
-                delta = (close.iloc[-1] - low.iloc[-1]) / candle_range
-                if direction == "BUY" and delta > 0.7:
-                    score += 15
-                    reasons.append(f"Delta bullish {delta:.2f}")
-                elif direction == "SELL" and delta < 0.3:
-                    score += 15
-                    reasons.append(f"Delta bearish {delta:.2f}")
-        except Exception:
-            pass
-
-        # 11. Volume anomaly (institutional participation)
-        try:
-            vol = df_15m["volume"]
-            avg_vol = vol.iloc[-20:-1].mean()
-            if avg_vol > 0 and vol.iloc[-1] > avg_vol * 2:
+            # 5. OB on 15M
+            ob = detect_order_block(df_15m, direction)
+            if ob:
                 score += 10
-                reasons.append(f"Vol spike {vol.iloc[-1]/avg_vol:.1f}x")
-        except Exception:
-            pass
+                reasons.append("Order Block ✅")
 
-        # 12. Wick rejection at OB
-        try:
-            body = abs(df_15m["close"].iloc[-1] - df_15m["open"].iloc[-1])
-            candle_range = df_15m["high"].iloc[-1] - df_15m["low"].iloc[-1]
-            if candle_range > 0:
-                wick_ratio = 1 - (body / candle_range)
-                if wick_ratio > 0.6:
+            # 6. FVG on 15M
+            fvg = detect_fvg(df_15m, direction)
+            if fvg:
+                score += 10
+                reasons.append("FVG ✅")
+
+            # 7. RSI confirmation
+            if direction == "BUY" and rsi < 40:
+                score += 10
+                reasons.append(f"RSI oversold {rsi} ✅")
+            elif direction == "SELL" and rsi > 60:
+                score += 10
+                reasons.append(f"RSI overbought {rsi} ✅")
+
+            # 8. Stoch confirmation
+            if direction == "BUY" and stoch < 25:
+                score += 5
+                reasons.append(f"Stoch oversold {stoch} ✅")
+            elif direction == "SELL" and stoch > 75:
+                score += 5
+                reasons.append(f"Stoch overbought {stoch} ✅")
+
+            # 9. ADX trending
+            if adx > 25:
+                score += 5
+                reasons.append(f"ADX trending {adx} ✅")
+
+            # 10. Delta approximation
+            try:
+                cr = df_15m["high"].iloc[-1] - df_15m["low"].iloc[-1]
+                if cr > 0:
+                    delta = (df_15m["close"].iloc[-1] - df_15m["low"].iloc[-1]) / cr
+                    if direction == "BUY" and delta > 0.7:
+                        score += 15
+                        reasons.append(f"Delta bullish {delta:.2f} ✅")
+                    elif direction == "SELL" and delta < 0.3:
+                        score += 15
+                        reasons.append(f"Delta bearish {delta:.2f} ✅")
+            except Exception:
+                pass
+
+            # 11. Volume anomaly
+            try:
+                vol = df_15m["volume"]
+                avg_vol = vol.iloc[-20:-1].mean()
+                if avg_vol > 0 and vol.iloc[-1] > avg_vol * 2:
                     score += 10
-                    reasons.append(f"Wick rejection {wick_ratio:.2f}")
-        except Exception:
-            pass
+                    reasons.append(f"Vol spike {vol.iloc[-1]/avg_vol:.1f}x ✅")
+            except Exception:
+                pass
 
-        # 13. Price efficiency ratio (directional conviction)
-        try:
-            closes = df_15m["close"].iloc[-10:]
-            net = abs(closes.iloc[-1] - closes.iloc[0])
-            total = closes.diff().abs().sum()
-            if total > 0:
-                efficiency = net / total
-                if efficiency > 0.6:
+            # 12. Wick rejection
+            try:
+                body = abs(df_15m["close"].iloc[-1] - df_15m["open"].iloc[-1])
+                cr2 = df_15m["high"].iloc[-1] - df_15m["low"].iloc[-1]
+                if cr2 > 0 and (1 - body/cr2) > 0.6:
                     score += 10
-                    reasons.append(f"Efficiency {efficiency:.2f}")
-        except Exception:
-            pass
+                    reasons.append(f"Wick rejection ✅")
+            except Exception:
+                pass
 
-        # 14. Sweep + absorption (institutional stop hunt)
-        try:
-            recent_high = df_15m["high"].iloc[-20:-2].max()
-            recent_low = df_15m["low"].iloc[-20:-2].min()
-            last_high = df_15m["high"].iloc[-2]
-            last_low = df_15m["low"].iloc[-2]
-            last_close = df_15m["close"].iloc[-1]
-            if direction == "BUY" and last_low < recent_low and last_close > recent_low:
-                score += 15
-                reasons.append("Sweep+absorption BUY")
-            elif direction == "SELL" and last_high > recent_high and last_close < recent_high:
-                score += 15
-                reasons.append("Sweep+absorption SELL")
-        except Exception:
-            pass
+            # 13. Efficiency ratio
+            try:
+                closes = df_15m["close"].iloc[-10:]
+                net = abs(closes.iloc[-1] - closes.iloc[0])
+                total = closes.diff().abs().sum()
+                if total > 0 and net/total > 0.6:
+                    score += 10
+                    reasons.append(f"Efficiency ✅")
+            except Exception:
+                pass
 
-        # Minimum score 70/100
-        if score < 100:
-            print(f"  Score {score}/160 — below scalp threshold")
-            continue
+            # 14. Sweep + absorption
+            try:
+                rh = df_15m["high"].iloc[-20:-2].max()
+                rl = df_15m["low"].iloc[-20:-2].min()
+                lh = df_15m["high"].iloc[-2]
+                ll = df_15m["low"].iloc[-2]
+                lc = df_15m["close"].iloc[-1]
+                if direction == "BUY" and ll < rl and lc > rl:
+                    score += 15
+                    reasons.append("Sweep+absorption BUY ✅")
+                elif direction == "SELL" and lh > rh and lc < rh:
+                    score += 15
+                    reasons.append("Sweep+absorption SELL ✅")
+            except Exception:
+                pass
 
-                # Cooldown check
-                cooldown_key = f"{symbol}_scalp"
-                if cooldown_key in SCALP_COOLDOWN_DICT:
-                    elapsed = (datetime.utcnow() - SCALP_COOLDOWN_DICT[cooldown_key]).total_seconds() / 60
-                    if elapsed < 30:
-                        print(f"  Scalp cooldown — {int(30-elapsed)} mins remaining")
-                        continue
+            # Minimum score
+            if score < 100:
+                print(f"  Score {score}/160 — below threshold")
+                continue
 
-                # Calculate RR
-                rr = calc_rr(df_15m, direction, ob, atr)
-                if rr is None:
+            # Cooldown check
+            cooldown_key = f"{symbol}_scalp"
+            if cooldown_key in SCALP_COOLDOWN_DICT:
+                elapsed = (datetime.utcnow() - SCALP_COOLDOWN_DICT[cooldown_key]).total_seconds() / 60
+                if elapsed < 30:
+                    print(f"  Scalp cooldown — {int(30-elapsed)} mins remaining")
                     continue
 
-                # Format scalp signal
-                arrow = "⬆️" if direction == "BUY" else "⬇️"
-                emoji = "🟢" if direction == "BUY" else "🔴"
-                ny = pytz.timezone('America/New_York')
-                now_str = datetime.now(ny).strftime('%Y-%m-%d %H:%M')
+            # Calculate RR
+            rr = calc_rr(df_15m, direction, ob, atr)
+            if rr is None:
+                continue
 
-                msg = (
-                    f"⚡ <b>SCALP ALERT</b> {emoji} {arrow}\n"
-                    f"━━━━━━━━━━━━━━━━━━\n"
-                    f"📌 Pair: <b>{symbol}</b>\n"
-                    f"📍 Signal: <b>{direction}</b>\n"
-                    f"⭐ Rating: <b>{'⭐'*rating}</b>\n"
-                    f"🎯 Score: <b>{score}/100</b>\n"
-                    f"⏱ Timeframe: <b>15M</b>\n"
-                    f"━━━━━━━━━━━━━━━━━━\n"
-                    f"💰 Entry: <b>{rr['entry']}</b>\n"
-                    f"🛑 SL: <b>{rr['sl']}</b>\n"
-                    f"🎯 TP1 (1:2): <b>{rr['tp1']}</b>\n"
-                    f"🏆 TP2 (1:3): <b>{rr['tp2']}</b>\n"
-                    f"━━━━━━━━━━━━━━━━━━\n"
-                    f"✅ Confluence:\n"
-                )
-                for r in reasons:
-                    msg += f"  • {r}\n"
-                msg += (
-                    f"━━━━━━━━━━━━━━━━━━\n"
-                    f"⚠️ Move SL to BE at TP1\n"
-                    f"⏳ TTL: 30 mins\n"
-                    f"🕐 {now_str} NY\n"
-                    f"⚠️ <i>Always confirm before entering</i>"
-                )
+            # Format and send
+            arrow = "📈" if direction == "BUY" else "📉"
+            emoji = "🟢" if direction == "BUY" else "🔴"
+            ny = pytz.timezone("America/New_York")
+            now_str = datetime.now(ny).strftime("%Y-%m-%d %H:%M")
 
-                send_telegram(msg)
-                SCALP_COOLDOWN_DICT[cooldown_key] = datetime.utcnow()
-                scalp_found += 1
-                print(f"  ✅ Scalp signal: {symbol} {direction} {score}/100")
-                time.sleep(1)
+            msg = (
+                f"⚡ <b>SCALP ALERT</b> {emoji} {arrow}\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"📌 Pair: <b>{symbol}</b>\n"
+                f"📍 Signal: <b>{direction}</b>\n"
+                f"⭐ Rating: <b>{'⭐'*rating}</b>\n"
+                f"🎯 Score: <b>{score}/160</b>\n"
+                f"⏱ Timeframe: <b>15M</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"💰 Entry: <b>{rr['entry']}</b>\n"
+                f"🛑 SL: <b>{rr['sl']}</b>\n"
+                f"🎯 TP1 (1:2): <b>{rr['tp1']}</b>\n"
+                f"🏆 TP2 (1:3): <b>{rr['tp2']}</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"✅ Confluence:\n"
+            )
+            for r in reasons:
+                msg += f"  • {r}\n"
+            msg += (
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"⚠️ Move SL to BE at TP1\n"
+                f"⏰ TTL: 30 mins\n"
+                f"🕐 {now_str} NY\n"
+                f"⚠️ <i>Always confirm before entering</i>"
+            )
+
+            send_telegram(msg)
+            SCALP_COOLDOWN_DICT[cooldown_key] = datetime.utcnow()
+            found += 1
+            print(f"  ✅ Scalp signal: {symbol} {direction} {score}/160")
+            time.sleep(1)
 
         except Exception as e:
             print(f"  Error: {e}")
             continue
 
-    print(f"\n⚡ Scalp scan complete — {scalp_found} signal(s)")
+    print(f"\n⚡ Scalp scan complete — {found} signal(s)")
 
-if __name__ == "__main__":
-    from tvDatafeed import TvDatafeed
-    print("\U0001f680 ZenSignals Pro starting...")
-    tv = TvDatafeed()
-    run_scan_enhanced(tv)
-    try:
-        run_scalp_scan(tv)
-    except Exception as e:
-        print(f"Scalp error: {e}")

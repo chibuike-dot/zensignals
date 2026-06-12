@@ -1,4 +1,5 @@
-import os, urllib.request, json, sys
+import os, json, sys
+import requests
 from datetime import datetime
 import pytz
 
@@ -19,26 +20,16 @@ SYMBOL_EXCHANGE = {
 
 def send_telegram(msg):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    data = json.dumps({"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML"}).encode()
-    req = urllib.request.Request(url, data=data)
-    req.add_header("Content-Type", "application/json")
-    urllib.request.urlopen(req)
+    requests.post(url, json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML"})
 
 def supabase_get(query):
     url = f"{SUPABASE_URL}/rest/v1/signals?{query}"
-    req = urllib.request.Request(url)
-    req.add_header("apikey", SUPABASE_KEY)
-    req.add_header("Authorization", f"Bearer {SUPABASE_KEY}")
-    return json.loads(urllib.request.urlopen(req).read())
+    r = requests.get(url, headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"})
+    return r.json()
 
 def supabase_patch(signal_id, data):
     url = f"{SUPABASE_URL}/rest/v1/signals?id=eq.{signal_id}"
-    payload = json.dumps(data).encode()
-    req = urllib.request.Request(url, data=payload, method="PATCH")
-    req.add_header("apikey", SUPABASE_KEY)
-    req.add_header("Authorization", f"Bearer {SUPABASE_KEY}")
-    req.add_header("Content-Type", "application/json")
-    urllib.request.urlopen(req)
+    requests.patch(url, json=data, headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"})
 
 def get_current_price(symbol):
     from tvDatafeed import TvDatafeed, Interval

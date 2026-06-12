@@ -3045,6 +3045,19 @@ def run_scalp_scan(tv):
 
             send_telegram(msg)
             SCALP_COOLDOWN_DICT[cooldown_key] = datetime.utcnow()
+        memory["signals"].append({
+            "symbol": symbol,
+            "direction": direction,
+            "entry": rr["entry"],
+            "sl": rr["sl"],
+            "tp1": rr["tp"],
+            "tp2": rr["tp2"],
+            "score": score,
+            "trade_type": "SCALP",
+            "status": "open",
+            "time": now_str
+        })
+        save_memory(memory)
             found += 1
             print(f"  ✅ Scalp signal: {symbol} {direction} {score}/160")
             time.sleep(1)

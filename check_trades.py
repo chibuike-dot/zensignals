@@ -1,14 +1,10 @@
-import os, json, sys
-import requests
+import os, sys, json, requests
 from datetime import datetime
 import pytz
 
-SUPABASE_URL = os.environ["SUPABASE_URL"]
-SUPABASE_KEY = os.environ["SUPABASE_KEY"]
 BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
-# Full symbol->exchange map matching scanner.py SYMBOLS list
 SYMBOL_EXCHANGE = {
     "EURUSD": "FX_IDC", "GBPUSD": "FX_IDC", "USDJPY": "FX_IDC",
     "AUDUSD": "FX_IDC", "USDCAD": "FX_IDC", "USDCHF": "FX_IDC",
@@ -18,18 +14,31 @@ SYMBOL_EXCHANGE = {
     "BNBUSD": "BINANCE", "XRPUSD": "COINBASE",
 }
 
+GIST_ID = os.environ["GIST_ID"]
+GITHUB_TOKEN = os.environ["MY_GITHUB_TOKEN"]
+FILENAME = "zensignals_data.json"
+GIST_HEADERS = {
+    "Authorization": f"token {GITHUB_TOKEN}",
+    "Accept": "application/vnd.github.v3+json"
+}
+
+def read_gist():
+    r = requests.get(f"https://api.github.com/gists/{GIST_ID}", headers=GIST_HEADERS)
+    content = r.json()["files"][FILENAME]["content"]
+    return json.loads(content)
+
+def write_gist(data):
+    requests.patch(
+        f"https://api.github.com/gists/{GIST_ID}",
+        headers=GIST_HEADERS,
+        json={"files": {FILENAME: {"content": json.dumps(data, indent=2)}}}
+    )
+
 def send_telegram(msg):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    requests.post(url, json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML"})
-
-def supabase_get(query):
-    url = f"{SUPABASE_URL}/rest/v1/signals?{query}"
-    r = requests.get(url, headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"})
-    return r.json()
-
-def supabase_patch(signal_id, data):
-    url = f"{SUPABASE_URL}/rest/v1/signals?id=eq.{signal_id}"
-    requests.patch(url, json=data, headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"})
+    requests.post(
+        f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+        json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML"}
+    )
 
 def get_current_price(symbol):
     from tvDatafeed import TvDatafeed, Interval
@@ -44,7 +53,8 @@ def get_current_price(symbol):
     return None
 
 def check_open_trades():
-    signals = supabase_get("status=eq.OPEN&order=created_at.desc")
+    data = read_gist()
+    signals = [s for s in data["signals"] if s.get("status") == "OPEN"]
     if not signals:
         print("No open trades")
         return
@@ -52,6 +62,7 @@ def check_open_trades():
     ny = pytz.timezone("America/New_York")
     now_str = datetime.now(ny).strftime("%Y-%m-%d %H:%M")
     updates = []
+    changed = False
 
     for sig in signals:
         symbol = sig.get("symbol")
@@ -84,7 +95,8 @@ def check_open_trades():
                 status = "LOSS"; emoji = "❌ SL Hit"
 
         if status:
-            supabase_patch(sig_id, {"status": status})
+            sig["status"] = status
+            changed = True
             updates.append(
                 f"{emoji}\n"
                 f"📌 <b>{symbol}</b> {direction}\n"
@@ -92,19 +104,22 @@ def check_open_trades():
                 f"⏰ {now_str} NY"
             )
 
+    if changed:
+        write_gist(data)
     if updates:
         send_telegram("🔔 <b>Trade Update</b>\n\n" + "\n\n".join(updates))
     else:
         print("No trades closed this cycle")
 
 def pnl_summary():
-    all_sigs = supabase_get("order=created_at.desc&limit=200")
-    total = len(all_sigs)
-    wins = sum(1 for s in all_sigs if s.get("status") == "WIN")
-    losses = sum(1 for s in all_sigs if s.get("status") == "LOSS")
-    open_t = sum(1 for s in all_sigs if s.get("status") == "OPEN")
+    data = read_gist()
+    sigs = data["signals"]
+    total = len(sigs)
+    wins = sum(1 for s in sigs if s["status"] == "WIN")
+    losses = sum(1 for s in sigs if s["status"] == "LOSS")
+    open_t = sum(1 for s in sigs if s["status"] == "OPEN")
     winrate = round(wins / (wins + losses) * 100) if (wins + losses) > 0 else 0
-    msg = (
+    send_telegram(
         f"💹 <b>ZenSignals P&L Summary</b>\n\n"
         f"Total Signals: {total}\n"
         f"✅ Wins: {wins}\n"
@@ -112,7 +127,6 @@ def pnl_summary():
         f"📊 Win Rate: {winrate}%\n"
         f"🔓 Open: {open_t}"
     )
-    send_telegram(msg)
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "pnl":

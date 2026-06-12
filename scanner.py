@@ -13,7 +13,7 @@ import pytz
 import urllib.request
 import urllib.parse
 
-SUPABASE_URL = "https://bnonwdvjjibxukkicpla.supabase.co"
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://bnomwdvjjibxukkicpla.supabase.co")
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJub253ZHZqamlieHVra2ljcGxhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA4MzY0MDUsImV4cCI6MjA5NjQxMjQwNX0.VFUCJZGGmBso7GOTNBBcmPqHfR0vdBpLgizbBd4gaGU"
 
 def supabase_insert(data):

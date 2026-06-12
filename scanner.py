@@ -3049,16 +3049,7 @@ def run_scalp_scan(tv):
             found += 1
             print(f"  ✅ Scalp signal: {symbol} {direction} {score}/160")
             time.sleep(1)
-                supabase_insert({"symbol": symbol, "direction": direction, "score": score, "phase": "Scalp", "session": session, "entry": rr["entry"], "sl": rr["sl"], "tp1": rr["tp"], "tp2": rr["tp2"], "rsi": rsi, "stoch": stoch, "adx": adx, "atr": atr, "status": "OPEN", "trade_type": "SCALP"})
-                "symbol": symbol, "direction": direction,
-                "score": score, "phase": "Scalp",
-                "session": session, "entry": rr["entry"],
-                "sl": rr["sl"], "tp1": rr["tp"],
-                "tp2": rr["tp2"], "rsi": rsi,
-                "stoch": stoch, "adx": adx,
-                "atr": atr, "status": "OPEN",
-                "trade_type": "SCALP",
-            })
+            supabase_insert({"symbol": symbol, "direction": direction, "score": score, "phase": "Scalp", "session": session, "entry": rr["entry"], "sl": rr["sl"], "tp1": rr["tp"], "tp2": rr["tp2"], "rsi": rsi, "stoch": stoch, "adx": adx, "atr": atr, "status": "OPEN", "trade_type": "SCALP"})
         except Exception:
             pass
 

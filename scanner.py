@@ -3038,7 +3038,8 @@ def run_scalp_scan(tv):
             msg += (
                 f"━━━━━━━━━━━━━━━━━━━━\n"
                 f"⚠️ Move SL to BE at TP1\n"
-                f"⏰ TTL: 30 mins\n"
+        f"🕐 Trade Type: <b>SCALP</b>\n"
+        f"⏱ TTL: 30 mins\n"
                 f"🕐 {now_str} NY\n"
                 f"⚠️ <i>Always confirm before entering</i>"
             )
